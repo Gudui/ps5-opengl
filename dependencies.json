@@ -23,7 +23,7 @@
   },
   "native_boilerplate": {
     "url": "https://github.com/blackbearreloaded/ps5-native-app-boilerplate.git",
-    "revision": "722f2227a8bb6fa2229120546995b6562552c752",
+    "revision": "c693b0ae0c0feca8cc13a6010a588d0e325490ac",
     "payload_sdk": "v0.42",
     "payload_sdk_archive_sha256": "8cfbc7cd5811e719eb4f0c47eea668d3dc7b40bc8ab11c4a5031d40c23ec02da"
   }
