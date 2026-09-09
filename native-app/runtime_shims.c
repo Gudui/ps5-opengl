@@ -10,6 +10,11 @@
 extern int sceKernelUsleep(uint32_t microseconds);
 
 __attribute__((constructor)) static void pss_opengl_open_log(void) {
+#ifdef PS5_NATIVE_BOUNDED_TRIANGLE
+  /* Retain inherited console descriptors; do not depend on writable title storage. */
+  setvbuf(stdout, NULL, _IONBF, 0);
+  setvbuf(stderr, NULL, _IONBF, 0);
+#else
   FILE *stream = freopen("/download0/pss-opengl.log", "w", stdout);
   /* Start a fresh receipt, then make both independent streams append-only. */
   if (stream != NULL)
@@ -19,11 +24,19 @@ __attribute__((constructor)) static void pss_opengl_open_log(void) {
   stream = freopen("/download0/pss-opengl.log", "a", stderr);
   if (stream != NULL)
     setvbuf(stream, NULL, _IONBF, 0);
+#endif
 }
 
 __attribute__((noreturn)) void catchReturnFromMain(int status) {
   printf("[pss-opengl-native] gate completed status=%d\n", status);
   fflush(NULL);
+#ifdef PS5_NATIVE_BOUNDED_TRIANGLE
+  extern int sceSystemServiceLoadExec(const char *, const char *const *);
+  puts("OGL2_EXIT_REQUEST_BEGIN");
+  int exit_result = sceSystemServiceLoadExec("exit", NULL);
+  printf("OGL2_FAIL operation=exit-request result=0x%x status=%d\n", exit_result, status);
+  fflush(NULL);
+#endif
   for (;;)
     sceKernelUsleep(100000);
 }

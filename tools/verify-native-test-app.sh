@@ -9,7 +9,10 @@ set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 stage=${1:-"$root/build/native-app/PPSA99005"}
-dist="$stage/dist/PPSA99005"
+title_id=PPSA99005
+[[ ! -f "$stage/title-id.txt" ]] || title_id=$(tr -d '\r\n' < "$stage/title-id.txt")
+[[ $title_id =~ ^PPSA99[0-9]{3}$ ]] || exit 2
+dist="$stage/dist/$title_id"
 linked="$stage/build/llvm-pie.elf"
 converted="$stage/build/eboot.elf"
 selected="$stage/selected-test.txt"
@@ -22,16 +25,16 @@ for artifact in "$dist/eboot.bin" "$dist/sce_module/libc.prx" \
     }
 done
 
-python3 - "$dist/sce_sys/param.json" "$converted" <<'PY'
+python3 - "$dist/sce_sys/param.json" "$converted" "$title_id" <<'PY'
 import json
 import struct
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as stream:
     metadata = json.load(stream)
-assert metadata["titleId"] == "PPSA99005"
-assert metadata["conceptId"] == "99005"
-assert metadata["contentId"].startswith("UP9000-PPSA99005_00-")
+assert metadata["titleId"] == sys.argv[3]
+assert metadata["conceptId"] == sys.argv[3][4:]
+assert metadata["contentId"].startswith("UP9000-" + sys.argv[3] + "_00-")
 
 with open(sys.argv[2], "rb") as stream:
     elf = stream.read()
@@ -54,7 +57,16 @@ gate=$(tr -d '\r\n' < "$selected")
     exit 1
 }
 grep -aFq '[pss-opengl-native] gate completed status=%d' "$linked"
-grep -aFq '/download0/pss-opengl.log' "$linked"
+if [[ $gate == egl_public_core33_triangle.o ]]; then
+    for marker in OGL2_MAIN_ENTER OGL2_RUN_COMPLETE OGL2_EGL_TEARDOWN_OK OGL2_EXIT_REQUEST_BEGIN "$title_id"; do
+        grep -aFq "$marker" "$linked"
+    done
+    grep -aFq "$(cat "$stage/source-commit.txt")" "$linked"
+    nm -u "$linked" | grep -F sceSystemServiceLoadExec >/dev/null
+    readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
+else
+    grep -aFq '/download0/pss-opengl.log' "$linked"
+fi
 # Drain producers under pipefail: grep -q can otherwise make nm/readelf SIGPIPE.
 nm -u "$linked" | grep -F 'sceAgcDcbSetNumInstances' >/dev/null
 for wrapper in __wrap_malloc __wrap_free; do
@@ -83,6 +95,6 @@ if readelf --dyn-syms --wide "$linked" | tail -n +4 | grep -v ' UND ' >/dev/null
     exit 1
 fi
 
-printf 'Native app verified: PPSA99005 gate=%s\n' "$gate"
+printf 'Native app verified: %s gate=%s\n' "$title_id" "$gate"
 sha256sum "$dist/eboot.bin" "$dist/sce_module/libc.prx" \
     "$dist/sce_sys/param.json"

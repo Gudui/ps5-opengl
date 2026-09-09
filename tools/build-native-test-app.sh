@@ -10,15 +10,24 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 template=${PS5_NATIVE_APP_TEMPLATE:-"$root/../ps5-native-app-boilerplate"}
 requested_test=${1:-core33-texture-rectangle}
+title_id=${PS5_NATIVE_TITLE_ID:-PPSA99005}
+title_name=${PS5_NATIVE_TITLE_NAME:-PSS OpenGL 3.3 Tests}
+[[ $title_id =~ ^PPSA99[0-9]{3}$ ]] || { echo 'Invalid native title ID' >&2; exit 2; }
+[[ -n $title_name && ${#title_name} -le 80 && $title_name != *$'\n'* ]] || exit 2
+build_id=$(git -C "$root" rev-parse HEAD)
+
 
 if [[ $requested_test == --list ]]; then
-    printf 'egl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
+    printf 'egl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o' "$root/tests/ps5/Makefile" |
         sort -u
     exit 0
 fi
 
 case "$requested_test" in
+    core33-triangle)
+        gate_object=egl_public_core33_triangle.o
+        ;;
     core33-texture-rectangle)
         gate_object=egl_public_core33_texture_rectangle.o
         ;;
@@ -40,7 +49,7 @@ case "$requested_test" in
         ;;
 esac
 
-[[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
+[[ $gate_object == egl_public_core33_triangle.o ]] || [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o:' "$root/tests/ps5/Makefile"
 ) || {
     printf 'unknown public OpenGL test object: %s\n' "$gate_object" >&2
@@ -69,7 +78,21 @@ boilerplate_commit=$(git -c safe.directory="$template" -C "$template" \
     rev-parse HEAD)
 
 sdk="$template/.deps/native/ps5-payload-sdk"
-if [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]]; then
+if [[ $gate_object == egl_public_core33_triangle.o ]]; then
+    test -z "$(git -C "$root" status --porcelain)" || { echo 'Triangle requires clean source checkpoint' >&2; exit 2; }
+    prefix=$(realpath -m -- "${PS5_OPENGL_PREFIX:-$root/build/sdk/ps5-opengl-core33}")
+    (cd "$prefix" && sha256sum --check --strict manifest.sha256 >/dev/null)
+    object_dir="$root/build/native-triangle/$title_id"
+    mkdir -p "$object_dir"
+    printf '#define PS5_NATIVE_TITLE_ID "%s"\n#define PS5_NATIVE_BUILD_ID "%s"\n' "$title_id" "$build_id" > "$object_dir/native_identity.h"
+    PS5_PAYLOAD_SDK="$sdk" sh "$template/tooling/prospero-clang18" \
+        -std=c11 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
+        -DGL_GLEXT_PROTOTYPES=1 -I"$prefix/include" -I"$object_dir" \
+        -c "$root/examples/core33-triangle/native.c" -o "$object_dir/$gate_object"
+    gate_object_path="$object_dir/$gate_object"
+    static_libraries=("$prefix/lib/libPS5OpenGLCore33.a" "$sdk/target/lib/libSceSystemService.so")
+    public_headers="$prefix/include"
+elif [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]]; then
     renderer=${gate_object#egl_public_core33_}
     renderer=${renderer%.o}
     renderer=${renderer%_tv}
@@ -118,8 +141,8 @@ for library in "${static_libraries[@]}"; do
     test -s "$library"
 done
 
-app="$root/build/native-app/PPSA99005"
-[[ "$app" == "$root/build/native-app/PPSA99005" && -n "$test_name" ]] || exit 2
+app="$root/build/native-app/$title_id"
+[[ "$app" == "$root/build/native-app/$title_id" && -n "$test_name" ]] || exit 2
 mkdir -p "$app"
 cp "$template/Makefile" "$app/Makefile"
 for directory in assets runtime sce_sys tooling tools; do
@@ -132,6 +155,7 @@ test "$(grep -Fc "$heap_default" "$heap_source")" = 1
 sed -i "s/$heap_default/write_u64(result.data, result.heap_size, 0x10000000ULL);/" \
     "$heap_source"
 link_script="$app/tools/build.sh"
+# shellcheck disable=SC1003 # Literal trailing backslash is the upstream patch point.
 link_marker='--eh-frame-hdr \'
 test "$(grep -Fc -- "$link_marker" "$link_script")" = 1
 sed -i 's/--eh-frame-hdr \\/--eh-frame-hdr --wrap=malloc --wrap=calloc --wrap=realloc --wrap=free --wrap=posix_memalign --wrap=malloc_usable_size \\/' \
@@ -148,6 +172,17 @@ for headers in EGL GL KHR; do
     cp -a "$public_headers/$headers" "$app/include/"
 done
 cp "$root/native-app/param.json" "$app/sce_sys/param.json"
+python3 - "$app/sce_sys/param.json" "$title_id" "$title_name" <<'TITLE_METADATA'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+metadata = json.loads(path.read_text())
+metadata['titleId'] = sys.argv[2]
+metadata['conceptId'] = sys.argv[2][4:]
+metadata['contentId'] = metadata['contentId'].replace('PPSA99005', sys.argv[2])
+metadata['localizedParameters']['en-US']['titleName'] = sys.argv[3]
+path.write_text(json.dumps(metadata, indent=2) + '\n')
+TITLE_METADATA
 if [[ ${PS5_IMGUI_WINDOW_TARGET:-60} -gt 60 ]]; then
     # Ordinary high-resolution/HFR title metadata, matching the native VideoOut request.
     python3 - "$app/sce_sys/param.json" <<'HFR_METADATA'
@@ -165,7 +200,7 @@ fi
 group="$app/vendor/libps5_opengl_group.a"
 {
     printf 'SEARCH_DIR("%s")\n' "$sdk/target/lib"
-    if [[ $gate_object == egl_public_core33_imgui*.o ]]; then
+    if [[ $gate_object == egl_public_core33_imgui*.o || $gate_object == egl_public_core33_triangle.o ]]; then
         printf 'SEARCH_DIR("%s")\n' "$prefix/lib"
     fi
     printf 'EXTERN(ps5_agc_gate2_run)\n'
@@ -176,6 +211,11 @@ group="$app/vendor/libps5_opengl_group.a"
 } > "$group"
 printf 'APP_INCLUDE_PATHS = include\nAPP_STATIC_ARCHIVES = vendor/libps5_opengl_group.a\n' \
     > "$app/.env"
+if [[ $gate_object == egl_public_core33_triangle.o ]]; then
+    printf 'APP_DEFINITIONS = PS5_NATIVE_BOUNDED_TRIANGLE=1\n' >> "$app/.env"
+fi
+printf '%s\n' "$title_id" > "$app/title-id.txt"
+printf '%s\n' "$build_id" > "$app/source-commit.txt"
 printf '%s\n' "$gate_object" > "$app/selected-test.txt"
 
 if [[ ! -x "$app/.deps/native/ps5-payload-sdk/bin/prospero-lld" ]]; then
@@ -204,7 +244,7 @@ PS5_PAYLOAD_SDK="$app_sdk" sh "$app/tooling/prospero-clang18" \
 make -C "$app" --no-print-directory -j8 app
 [[ -z $oracle ]] || grep -aFq "$oracle" "$app/build/eboot.elf"
 
-dist="$app/dist/PPSA99005"
+dist="$app/dist/$title_id"
 test -s "$dist/eboot.bin"
 test -s "$dist/sce_module/libc.prx"
 test -s "$dist/sce_sys/param.json"
