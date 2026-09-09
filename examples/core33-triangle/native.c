@@ -38,7 +38,14 @@ int main(void)
       "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
    static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
       "void main(){color=vec4(1.0,0.0,1.0,1.0);}\n";
+#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+   /* First three vertices are degenerate: ignoring the EBO cannot pass visually. */
+   static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, -0.5f,-0.5f, 0.0f,0.5f};
+   static const GLushort indices[] = {0, 1, 3};
+   GLuint ebo = 0;
+#else
    static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, 0.0f,0.5f};
+#endif
    static const EGLint configs[] = {EGL_SURFACE_TYPE,EGL_WINDOW_BIT,
       EGL_RENDERABLE_TYPE,EGL_OPENGL_BIT,EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,
       EGL_BLUE_SIZE,8,EGL_ALPHA_SIZE,8,EGL_NONE};
@@ -104,11 +111,22 @@ int main(void)
    glViewport(0, 0, width, height);
    glClearColor(0, 0, 0, 1);
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
+#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+   glGenBuffers(1, &ebo);
+   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+   glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+   CHECK(ebo && glGetError() == GL_NO_ERROR, "index-setup");
+   pss_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0");
+#endif
    start = sceKernelGetProcessTime();
    for (frames = 0; frames < 600; ++frames) {
       CHECK(sceKernelGetProcessTime() - start < UINT64_C(30000000), "frame-deadline");
       glClear(GL_COLOR_BUFFER_BIT);
+#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+      glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
+#else
       glDrawArrays(GL_TRIANGLES, 0, 3);
+#endif
       glFinish();
       CHECK(glGetError() == GL_NO_ERROR, "draw-finish");
       CHECK(eglSwapBuffers(display, surface), "swap");
@@ -122,6 +140,9 @@ cleanup:
    if (result) pss_native_trace("OGL2_FAIL operation=%s egl=0x%x frames=%u\n", operation,
                       eglGetError(), frames);
    if (current) {
+#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+      if (ebo) glDeleteBuffers(1, &ebo);
+#endif
       if (vbo) glDeleteBuffers(1, &vbo);
       if (vao) glDeleteVertexArrays(1, &vao);
       if (program) glDeleteProgram(program);

@@ -57,13 +57,17 @@ gate=$(tr -d '\r\n' < "$selected")
     exit 1
 }
 grep -aFq '[pss-opengl-native] gate completed status=%d' "$linked"
-if [[ $gate == egl_public_core33_triangle.o ]]; then
+if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o ]]; then
     for marker in OGL2_MAIN_ENTER OGL2_RUN_COMPLETE OGL2_EGL_TEARDOWN_OK OGL2_EXIT_REQUEST_BEGIN "$title_id"; do
         grep -aFq "$marker" "$linked"
     done
     grep -aFq "$(cat "$stage/source-commit.txt")" "$linked"
     nm -u "$linked" | grep -F sceSystemServiceLoadExec >/dev/null
     nm -u "$linked" | grep -F sceKernelDebugOutText >/dev/null
+    if [[ $gate == egl_public_core33_indexed_triangle.o ]]; then
+        grep -aFq 'OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0' "$linked"
+        nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
+    fi
     readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
 else
     grep -aFq '/download0/pss-opengl.log' "$linked"

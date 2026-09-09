@@ -18,13 +18,16 @@ build_id=$(git -C "$root" rev-parse HEAD)
 
 
 if [[ $requested_test == --list ]]; then
-    printf 'egl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
+    printf 'egl_public_core33_indexed_triangle.o\negl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o' "$root/tests/ps5/Makefile" |
         sort -u
     exit 0
 fi
 
 case "$requested_test" in
+    core33-indexed-triangle)
+        gate_object=egl_public_core33_indexed_triangle.o
+        ;;
     core33-triangle)
         gate_object=egl_public_core33_triangle.o
         ;;
@@ -49,7 +52,7 @@ case "$requested_test" in
         ;;
 esac
 
-[[ $gate_object == egl_public_core33_triangle.o ]] || [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
+[[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o ]] || [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o:' "$root/tests/ps5/Makefile"
 ) || {
     printf 'unknown public OpenGL test object: %s\n' "$gate_object" >&2
@@ -78,15 +81,17 @@ boilerplate_commit=$(git -c safe.directory="$template" -C "$template" \
     rev-parse HEAD)
 
 sdk="$template/.deps/native/ps5-payload-sdk"
-if [[ $gate_object == egl_public_core33_triangle.o ]]; then
+if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o ]]; then
     test -z "$(git -C "$root" status --porcelain)" || { echo 'Triangle requires clean source checkpoint' >&2; exit 2; }
     prefix=$(realpath -m -- "${PS5_OPENGL_PREFIX:-$root/build/sdk/ps5-opengl-core33}")
     (cd "$prefix" && sha256sum --check --strict manifest.sha256 >/dev/null)
     object_dir="$root/build/native-triangle/$title_id"
     mkdir -p "$object_dir"
     printf '#define PS5_NATIVE_TITLE_ID "%s"\n#define PS5_NATIVE_BUILD_ID "%s"\n' "$title_id" "$build_id" > "$object_dir/native_identity.h"
+    triangle_defines=()
+    [[ $gate_object != egl_public_core33_indexed_triangle.o ]] || triangle_defines=(-DPS5_NATIVE_INDEXED_TRIANGLE=1)
     PS5_PAYLOAD_SDK="$sdk" sh "$template/tooling/prospero-clang18" \
-        -std=c11 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
+        "${triangle_defines[@]}" -std=c11 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
         -DGL_GLEXT_PROTOTYPES=1 -I"$prefix/include" -I"$object_dir" -I"$root/native-app" \
         -c "$root/examples/core33-triangle/native.c" -o "$object_dir/$gate_object"
     gate_object_path="$object_dir/$gate_object"
@@ -222,7 +227,7 @@ fi
 group="$app/vendor/libps5_opengl_group.a"
 {
     printf 'SEARCH_DIR("%s")\n' "$sdk/target/lib"
-    if [[ $gate_object == egl_public_core33_imgui*.o || $gate_object == egl_public_core33_triangle.o ]]; then
+    if [[ $gate_object == egl_public_core33_imgui*.o || $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o ]]; then
         printf 'SEARCH_DIR("%s")\n' "$prefix/lib"
     fi
     printf 'EXTERN(ps5_agc_gate2_run)\n'
@@ -233,7 +238,7 @@ group="$app/vendor/libps5_opengl_group.a"
 } > "$group"
 printf 'APP_INCLUDE_PATHS = include\nAPP_STATIC_ARCHIVES = vendor/libps5_opengl_group.a\n' \
     > "$app/.env"
-if [[ $gate_object == egl_public_core33_triangle.o ]]; then
+if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o ]]; then
     printf 'APP_DEFINITIONS = PS5_NATIVE_BOUNDED_TRIANGLE=1\n' >> "$app/.env"
 fi
 printf '%s\n' "$title_id" > "$app/title-id.txt"
