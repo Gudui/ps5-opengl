@@ -87,7 +87,7 @@ if [[ $gate_object == egl_public_core33_triangle.o ]]; then
     printf '#define PS5_NATIVE_TITLE_ID "%s"\n#define PS5_NATIVE_BUILD_ID "%s"\n' "$title_id" "$build_id" > "$object_dir/native_identity.h"
     PS5_PAYLOAD_SDK="$sdk" sh "$template/tooling/prospero-clang18" \
         -std=c11 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
-        -DGL_GLEXT_PROTOTYPES=1 -I"$prefix/include" -I"$object_dir" \
+        -DGL_GLEXT_PROTOTYPES=1 -I"$prefix/include" -I"$object_dir" -I"$root/native-app" \
         -c "$root/examples/core33-triangle/native.c" -o "$object_dir/$gate_object"
     gate_object_path="$object_dir/$gate_object"
     static_libraries=("$prefix/lib/libPS5OpenGLCore33.a" "$sdk/target/lib/libSceSystemService.so")
@@ -184,6 +184,7 @@ cp "$root/native-app/app-symbols.map" "$app/tooling/native/app-symbols.map"
 rm -rf -- "$app/src" "$app/include" "$app/vendor"
 mkdir -p "$app/src" "$app/include" "$app/vendor"
 cp "$root/native-app/runtime_shims.c" "$app/src/runtime_shims.c"
+cp "$root/native-app/native_diagnostics.h" "$app/include/native_diagnostics.h"
 cp "$root/native-app/app_heap.c" "$app/src/app_heap.c"
 if [[ ${PS5_GPU_MEMORY_PROFILE:-0} == 1 ]]; then
     cp "$root/native-app/gpu_memory.c" "$app/src/gpu_memory.c"

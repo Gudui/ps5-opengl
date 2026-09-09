@@ -8,6 +8,7 @@
 #include <EGL/eglext.h>
 #include <GL/gl.h>
 #include "native_identity.h"
+#include "native_diagnostics.h"
 
 extern uint64_t sceKernelGetProcessTime(void);
 
@@ -23,11 +24,11 @@ static GLuint compile_shader(GLenum type, const char *source, const char *stage)
       char log[512];
       GLsizei length = 0;
       glGetShaderInfoLog(shader, sizeof(log), &length, log);
-      printf("OGL2_FAIL stage=%s log=%.*s\n", stage, length, log);
+      pss_native_trace("OGL2_FAIL stage=%s log=%.*s\n", stage, length, log);
       glDeleteShader(shader);
       return 0;
    }
-   printf("OGL2_SHADER_COMPILE_OK stage=%s\n", stage);
+   pss_native_trace("OGL2_SHADER_COMPILE_OK stage=%s\n", stage);
    return shader;
 }
 
@@ -56,13 +57,13 @@ int main(void)
    uint64_t start = 0;
    unsigned frames = 0;
 #define CHECK(expr, name) do { operation = name; if (!(expr)) goto cleanup; } while (0)
-   printf("OGL2_MAIN_ENTER title=%s build=%s start_us=%llu\n", PS5_NATIVE_TITLE_ID,
+   pss_native_trace("OGL2_MAIN_ENTER title=%s build=%s start_us=%llu\n", PS5_NATIVE_TITLE_ID,
           PS5_NATIVE_BUILD_ID, (unsigned long long)sceKernelGetProcessTime());
    display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
    CHECK(display != EGL_NO_DISPLAY, "get-display");
    CHECK(eglInitialize(display, &major, &minor), "initialize");
    initialized = 1;
-   puts("OGL2_EGL_INITIALIZE_OK");
+   pss_native_trace("OGL2_EGL_INITIALIZE_OK");
    CHECK(eglBindAPI(EGL_OPENGL_API), "bind-api");
    CHECK(eglChooseConfig(display, configs, &config, 1, &count) && count == 1, "config");
    surface = eglCreateWindowSurface(display, config, (EGLNativeWindowType)0, NULL);
@@ -76,7 +77,7 @@ int main(void)
    glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
    CHECK(gl_major == 3 && gl_minor == 3 && (profile & GL_CONTEXT_CORE_PROFILE_BIT)
          && glGetError() == GL_NO_ERROR, "context-profile");
-   printf("OGL2_CONTEXT_CURRENT major=%d minor=%d profile=core\n", gl_major, gl_minor);
+   pss_native_trace("OGL2_CONTEXT_CURRENT major=%d minor=%d profile=core\n", gl_major, gl_minor);
    CHECK(eglQuerySurface(display, surface, EGL_WIDTH, &width) &&
          eglQuerySurface(display, surface, EGL_HEIGHT, &height) && width > 0 && height > 0,
          "surface-size");
@@ -91,7 +92,7 @@ int main(void)
    glLinkProgram(program);
    glGetProgramiv(program, GL_LINK_STATUS, &linked);
    CHECK(linked, "program-link");
-   puts("OGL2_PROGRAM_LINK_OK");
+   pss_native_trace("OGL2_PROGRAM_LINK_OK");
    glGenVertexArrays(1, &vao);
    glBindVertexArray(vao);
    glGenBuffers(1, &vbo);
@@ -112,13 +113,13 @@ int main(void)
       CHECK(glGetError() == GL_NO_ERROR, "draw-finish");
       CHECK(eglSwapBuffers(display, surface), "swap");
       if (frames == 0 || (frames + 1) % 60 == 0)
-         printf("OGL2_FRAME_COMPLETE frame=%u\n", frames + 1);
+         pss_native_trace("OGL2_FRAME_COMPLETE frame=%u\n", frames + 1);
    }
-   printf("OGL2_RUN_COMPLETE frames=%u elapsed_ms=%llu reason=frame-limit\n", frames,
+   pss_native_trace("OGL2_RUN_COMPLETE frames=%u elapsed_ms=%llu reason=frame-limit\n", frames,
           (unsigned long long)((sceKernelGetProcessTime() - start) / 1000));
    result = 0;
 cleanup:
-   if (result) printf("OGL2_FAIL operation=%s egl=0x%x frames=%u\n", operation,
+   if (result) pss_native_trace("OGL2_FAIL operation=%s egl=0x%x frames=%u\n", operation,
                       eglGetError(), frames);
    if (current) {
       if (vbo) glDeleteBuffers(1, &vbo);
@@ -132,7 +133,7 @@ cleanup:
    if (context != EGL_NO_CONTEXT && !eglDestroyContext(display, context)) cleanup_ok = 0;
    if (surface != EGL_NO_SURFACE && !eglDestroySurface(display, surface)) cleanup_ok = 0;
    if (initialized && !eglTerminate(display)) cleanup_ok = 0;
-   if (!cleanup_ok) { puts("OGL2_FAIL operation=teardown"); result = 1; }
-   else if (!result) puts("OGL2_EGL_TEARDOWN_OK");
+   if (!cleanup_ok) { pss_native_trace("OGL2_FAIL operation=teardown"); result = 1; }
+   else if (!result) pss_native_trace("OGL2_EGL_TEARDOWN_OK");
    return result;
 }

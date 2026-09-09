@@ -7,6 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef PS5_NATIVE_BOUNDED_TRIANGLE
+#include "native_diagnostics.h"
+#endif
+
 extern int sceKernelUsleep(uint32_t microseconds);
 
 __attribute__((constructor)) static void pss_opengl_open_log(void) {
@@ -28,13 +32,17 @@ __attribute__((constructor)) static void pss_opengl_open_log(void) {
 }
 
 __attribute__((noreturn)) void catchReturnFromMain(int status) {
+#ifdef PS5_NATIVE_BOUNDED_TRIANGLE
+  pss_native_trace("[pss-opengl-native] gate completed status=%d\n", status);
+#else
   printf("[pss-opengl-native] gate completed status=%d\n", status);
+#endif
   fflush(NULL);
 #ifdef PS5_NATIVE_BOUNDED_TRIANGLE
   extern int sceSystemServiceLoadExec(const char *, const char *const *);
-  puts("OGL2_EXIT_REQUEST_BEGIN");
+  pss_native_trace("OGL2_EXIT_REQUEST_BEGIN");
   int exit_result = sceSystemServiceLoadExec("exit", NULL);
-  printf("OGL2_FAIL operation=exit-request result=0x%x status=%d\n", exit_result, status);
+  pss_native_trace("OGL2_FAIL operation=exit-request result=0x%x status=%d\n", exit_result, status);
   fflush(NULL);
 #endif
   for (;;)

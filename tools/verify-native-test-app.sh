@@ -63,6 +63,7 @@ if [[ $gate == egl_public_core33_triangle.o ]]; then
     done
     grep -aFq "$(cat "$stage/source-commit.txt")" "$linked"
     nm -u "$linked" | grep -F sceSystemServiceLoadExec >/dev/null
+    nm -u "$linked" | grep -F sceKernelDebugOutText >/dev/null
     readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
 else
     grep -aFq '/download0/pss-opengl.log' "$linked"
