@@ -197,7 +197,13 @@ int main(void) {
         original = json.loads((ROOT / "native-app/param.json").read_text())
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "param.json"
+            for title in ("PPSA99005", "PPSA99202"):
+                candidate = original | {"titleId": title}
+                path.write_text(json.dumps(candidate))
+                subprocess.run([sys.executable, "-", str(path), title],
+                               input=body, text=True, check=True)
+                self.assertEqual(json.loads(path.read_text()), candidate | {"attribute3": 0x80040})
             path.write_text(json.dumps(original))
-            subprocess.run([sys.executable, "-", str(path)], input=body, text=True, check=True)
-            actual = json.loads(path.read_text())
-        self.assertEqual(actual, original | {"attribute3": 0x80040})
+            mismatch = subprocess.run([sys.executable, "-", str(path), "PPSA99202"],
+                                      input=body, text=True, capture_output=True)
+            self.assertNotEqual(mismatch.returncode, 0)

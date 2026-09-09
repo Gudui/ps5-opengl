@@ -11,13 +11,17 @@ Documentation/example edits do not justify repeating all CTS cases.
 make test
 make test-imgui             # requires dependencies, installed SDK and host EGL/GL
 make test-compiler          # requires the built host PSBC library
-bash tools/verify-installed-sdk.sh
+bash tools/verify-installed-sdk.sh  # rebuilds a fresh SDK; never use on frozen bytes
 ```
 
 `make test` runs Python unit checks, strict-auditor self-tests and the published
 evidence verifier. It needs no SDK or PS5. CI runs this lane, not new GPU tests.
 The SDK verifier checks Make/pkg-config/CMake links and 344 Core exports;
 behavioral evidence comes from CTS and native renderer oracles.
+For a frozen SDK, use `tools/check-sdk-consumers.py` instead; the
+[bundle guide](sdk-bundle.md#verify-and-link-a-consumer) gives the non-rebuilding
+recipe. Verify an archive after extracting it to a new directory outside the
+source checkout, not only its staging directory.
 
 `test-compiler` runs existing real NIR/ACO regressions for framebuffer exports,
 vertex inputs and geometry descriptors, including invalid-input rejection.
@@ -86,11 +90,15 @@ feedback across small, non-square, tall and wide targets.
 
 Accept this sampled gate only when every selected case is Pass, all four actual
 render-target reports match, and all cycles have clean teardown/health/unlock.
-Keep the current candidate's host lifetime/hazard checks, native 512-object batch
+For G7/G8, retain their host lifetime/hazard checks, native 512-object batch
 boundary, 128-cube ordinary/instanced pixel checks, SDK links, Sokol renderer and
 repeated EGL-session results alongside CTS; the 51 cases alone do not exercise
 every optimized presentation path. Already verified frozen artifacts need not
 be rebuilt or rerun without an affected change.
+
+The later frozen G13 SDK has its own 204/204 sample and G15/G16 memory,
+ten-minute soak, texture-copy and layered-mip evidence; see the
+[enhancement gates](enhancement-plan.md). Keep those identities separate from G7/G8.
 
 Run one bounded batch per configuration, reuse remotely verified binaries/data,
 upload only changed selection files and stop observation at completion. No routine

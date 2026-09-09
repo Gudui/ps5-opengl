@@ -1,6 +1,28 @@
 # Offscreen performance and sustained stability
 
-## Validation plan
+Latest local G19 qualification repeats the matched 1080p FBO at **59.95 FPS**
+(p95 17.21 ms) and both 128-cube modes at **59.94 FPS**. Its own ten-minute soak
+passes 35,941 frames/21 probes with zero steady tracked heap/GPU growth; three
+launch/exit cycles pass nine EGL sessions and 54 frame oracles. Tracked GPU
+bytes/counts return to zero, and post-session heap stays at 9,455 bytes/22 blocks.
+All cycles tear down cleanly with healthy services and exact-token release.
+See [G19 identity and scope](sdk-bundle-g19.md); these are fresh G19 results,
+not inherited G13 acceptance. Multi-hour and recovery behavior remain unqualified.
+
+## G13/G16 findings (historical)
+
+Local follow-up (not published): the single-mip 2D RGBA8 native-layout candidate
+`16e651b` improves the same 1080p FBO case from **19.98 to 59.95 FPS**.
+Mean render time is 16.43 ms; p95 is 17.20 ms, so this is not a guarantee that
+every frame meets 16.67 ms. Pixels, retirement and teardown passed. Other formats,
+mips and layers retain staging. The three-session GPU-memory diagnostic returns
+tracked allocations/mappings to zero after every cleanup. Broader current-candidate
+acceptance included a ten-minute zero-growth tracked-memory soak, 204 passing
+CTS smoke executions across four configurations, and native copy/layered-mip
+regressions. See [the local enhancement gates](enhancement-plan.md) for identities,
+the excluded timed-out attempt, and remaining qualification limits.
+
+## G9/G10 validation plan (historical)
 
 | Gate | Change | Acceptance |
 | --- | --- | --- |
@@ -28,8 +50,9 @@ directories; add only milestone summaries here.
 
 G9 render mean/p95/p99: **50.042 / 51.066 / 51.472 ms**, versus
 70.942 / 83.484 / 85.288 ms for the control. This is completed offscreen
-throughput, not TV refresh or a game-FPS claim. Full-surface CPU transfers remain;
-the 60 FPS target is not met. The published SDK is unchanged.
+throughput, not TV refresh or a game-FPS claim. Full-surface CPU transfers remain
+in G9, which did not meet the 60 FPS target. G13's result above supersedes that
+performance limit for eligible images. The September 7 published SDK is unchanged.
 
 The soak's owned heap stabilized at 8,958,261 bytes/20,708 blocks. Its receipt
 records 112 widget changes, so this was a normal interactive session, not an
@@ -53,7 +76,7 @@ Memory observations exclude GPU mappings, foreign heaps and process RSS; ambiguo
 zero-size realloc behavior invalidates the accounting instead of changing allocator
 semantics. Flat owned-heap samples alone are not proof of a leak-free driver.
 
-## Yamagi handoff: next library candidates, not merged
+## Yamagi handoff (historical; now integrated as G11/G12)
 
 Reviewed game handoff `b711c4f` and its private runtime patch. The game reports
 user-observed 60 FPS, but its 66 sparse gameplay timing samples include heavier
@@ -63,7 +86,8 @@ derivative, not a new qualification of the canonical SDK.
 - Buffer-only arena (`c818ec1`): keep persistent textures from displacing transient buffers; preserve checked direct-allocation fallback. Validate texture/resource creation, cleanup and allocation pressure separately.
 - Batch-local texture flush reuse (`c176c4f`): extend the existing depth cache to eligible retained linear fragment textures. The helper passes host sanitizers against temporary current-source copies; native texture-update, backing-replacement, batch-drain and context-boundary regressions remain necessary.
 
-Integrate these as separate candidates on current source, retaining G9. Do not
-replace the SDK with the game's older private archive. Neither change removes
+These changes were integrated separately as G11/G12, retaining G9; see the
+[enhancement gates](enhancement-plan.md). They did not replace the SDK with the
+game's older private archive. Neither change removes
 the offscreen staging copies. Geometry/material batching, streaming choices,
 particle rendering and the single-mip quality tradeoff stay in the game port.

@@ -2,7 +2,7 @@
 
 The September 7 Core 3.3 campaign and final SDK consumer checks are complete
 within their [documented scope](validation.md). This is not proof of universal
-compatibility or production-grade stability. The updated runtime includes the
+compatibility or production-grade stability. That frozen runtime includes the
 instancing, constant-attribute, PrimitiveID/geometry, memory-ownership and batching
 fixes; its acceptance is a fresh complete matrix, not inherited baseline results.
 The [development history](performance-history.md) preserves the earlier failures.
@@ -10,18 +10,22 @@ Later source changes have [focused performance/regression evidence](performance.
 not a rerun of that complete campaign. Keep the frozen baseline and current source
 distinct when reporting compatibility.
 
-- **Integration:** fullscreen EGL/static SDK; no GLX/WGL, SDL/GLFW platform port,
-  desktop installation model or compatibility-profile guarantee.
+- **Integration:** fullscreen EGL/static SDK; the [SDL2 bridge](../integration/SDL2/README.md)
+  passed 180 native frames and two pixel checks with the distributed G25 pair
+  ([exact scope](sdk-bundle-g25.md)), separately from its older G19 run. It supports one
+  fixed 1080p Core 3.3 window/context and SDL's existing event/joystick path, not a
+  complete SDL platform port or verified physical input. GLX/WGL, GLFW, a desktop
+  installation model and compatibility-profile guarantees remain absent.
 - **Performance:** some transfers, formats, clears and other operations retain CPU
   fallbacks. Eligible draw batching is enabled by default; other paths remain
-  synchronous. The final 1080p ImGui demo sustained ~20 FPS for five minutes;
+  synchronous. The frozen-baseline 1080p ImGui demo sustained ~20 FPS for five minutes;
   thirty FPS is only its cap. Clear/presentation waits and broader workload
   optimization remain. These measurements do not predict full-game FPS.
   See [Performance](performance.md).
   The opt-in performance candidate averages ~119.88 FPS at 1080p, 1440p and 4K
   in 30-second windowed ImGui runs. Frame-time variation remains;
   this is not a long-session or full-game result. In contrast,
-  sampleable offscreen render targets still copy linear/tiled surfaces on the
+  older sampleable offscreen render targets copy linear/tiled surfaces on the
   CPU around each draw. Initial high-resolution ImGui FBO measurements are much
   slower; window throughput must not be generalized to render-to-texture workloads.
   The G7 CPU-copy optimization improves the matched 1080p FBO case from 3.54 to
@@ -34,17 +38,32 @@ distinct when reporting compatibility.
   not sustained performance at that count.
   The later G9 copy4 change improves a matched 1080p offscreen run from 14.10 to
   19.98 FPS, still CPU-copy limited. See [G9/G10 results](offscreen-stability.md).
+  The local G13 successor removes staging for eligible single-mip 2D RGBA8
+  images: the matched case reaches 59.95 FPS, with p95 17.20 ms. Other formats,
+  mips and layers retain staging. This focused improvement is not a universal
+  render-to-texture or full-game speed guarantee, and is not in the older SDK
+  download. See [the separately identified local candidate](sdk-bundle-g13.md).
+  G19's own focused qualification reproduces 59.95 FPS offscreen and 59.94 FPS
+  for both 128-cube modes; its [new sample and bounded stability checks](sdk-bundle-g19.md)
+  do not extend these results to arbitrary formats, games or HDMI modes.
+  G25 additionally verifies native storage for single-level 2D sRGB textures and
+  a [seven-case format/mip/layer batch](performance.md#broader-format-and-subresource-coverage-g25-local).
+  Its copy-heavy sRGB throughput remains ~20 composite cycles/s: no measured
+  speedup is claimed. Other staging paths and broader optimization remain.
+  The consolidated G25 SDK has its own 204-execution sample, ~59.94-FPS matched
+  offscreen/3D profiles, ten-minute tracked-memory soak and three EGL sessions;
+  these bounded checks do not establish exhaustive stability or game compatibility.
 - **Input/visual scope:** the demo has a minimal current-state pad adapter. Its
   earlier TV output was owner-confirmed; the final campaign used numerical
   readbacks, with no recorded widget changes or fresh TV/shell input observation.
   Host navigation checks passed.
-- **Lifecycle:** renderer runs report VideoOut unregister `80290009` (busy), then
+- **Lifecycle:** frozen-baseline renderer runs report VideoOut unregister `80290009` (busy), then
   successful close, EGL cleanup and runtime-layer release. A targeted development
   check passed three full EGL/ImGui sessions in one process; final renderer and
   five-minute demo teardown also passed. The warning remains.
   The later G6 candidate closes the whole port without the redundant unregister:
-  three native EGL sessions and the 4K120 check pass with no busy warning and
-  successful close/restoration. This is bounded full-port teardown evidence,
+  three native EGL sessions and a check rendering 4K at ~120 FPS pass without
+  busy warnings, with successful close/restoration. This is bounded full-port teardown evidence,
   not unregister-while-open support or device-loss recovery.
   Its five-minute 1080p60 endurance run also passed 17,970 frames and 11 pixel
   checks with successful close and healthy native teardown.
@@ -52,8 +71,20 @@ distinct when reporting compatibility.
   (15 EGL sessions). Owned-heap use stabilized during the soak and returned to
   the same post-session level across lifecycle runs. This accounting excludes
   direct GPU mappings, foreign heaps and process RSS.
+  Local G15/G16 diagnostics extend accounting to linked-title GPU direct
+  allocations/mappings: three sessions return tracked bytes/counts to zero, and
+  a ten-minute G13 soak has no steady heap/GPU growth. Foreign/module-internal
+  allocations and process RSS remain unmeasured; diagnostic builds do not
+  establish performance or replace fresh physical-control acceptance. The owner
+  reports that the local 4K app's earlier unsupported-refresh result occurred
+  with a capture card and TV-only launches always worked. Its three successful
+  receipts show 4K rendering at ~120 FPS but HDMI `1080P_11988`, then restoration
+  to `3840_2160P_5994`; they establish neither 4K120 HDMI nor a new timing defect.
+  That unshipped app uses an older G6 SDK; see [its separate scope](sdk-bundle-g13.md).
+  G19 separately passes a ten-minute tracked-memory soak and three launch/exit
+  cycles (nine EGL sessions), without steady heap/GPU growth or teardown failures.
 - **Stress:** maximum-axis framebuffers were tested, not an 8192x8192 allocation
-  or deliberate hardware OOM exhaustion. Five-minute runs and bounded recreation
+  or deliberate hardware OOM exhaustion. Ten-minute runs and bounded recreation
   are tested, not exhaustive long sessions, suspend/resume or device-loss recovery.
 - **Application memory:** the final SDK passes the original 8.3 MB live-malloc
   cube scenario through shader setup and 180 frames/2,596 pixel checks. Native

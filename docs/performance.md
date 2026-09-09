@@ -1,20 +1,148 @@
 # Performance
 
-Latest focused offscreen result: four-pixel color staging (`891dab7`) improves
-the matched 1080p ImGui FBO workload from **14.10 to 19.98 FPS**. Both 30-second
-runs pass pixel/completion and lifecycle checks; see the
-[offscreen and stability gates](offscreen-stability.md). CPU transfers remain,
-and this candidate is not a new full-validation or published SDK result.
+Latest focused offscreen result (September 8): G13 native storage reuse for
+single-mip 2D RGBA8 images (`16e651b`) improves the matched 1080p ImGui FBO
+workload from **19.98 to 59.95 FPS**. Both 30-second runs pass pixels, completion
+and lifecycle checks; render p95 is **17.20 ms**, not perfect 60 FPS pacing.
+Other formats, mips and layers retain staging. The frozen local 1080p60 SDK has
+204/204 sampled Pass results and a ten-minute tracked-memory soak; see the
+[offscreen and stability gates](offscreen-stability.md) and
+[local bundle scope](sdk-bundle-g13.md). It is local only; no new full CTS campaign was run.
 
 The September 7 baseline completes the [frozen Core 3.3 validation campaign](validation.md).
 Correctness coverage does not imply desktop-driver performance or predictable game FPS.
 
-The later opt-in candidate `610e6a3` averages **119.88 FPS at 1080p, 1440p and 4K**
+The earlier opt-in candidate `610e6a3` averages **119.88 FPS at 1080p, 1440p and 4K**
 in the original windowed ImGui scene, over 30 measured seconds per size.
 See [G5d results and limits](#g5d-verified-high-resolution-120-fps-candidate) and
 [build instructions](../examples/core33-imgui/README.md#high-refresh-window-benchmark-opt-in).
-These source changes have focused regressions, not a new full CTS campaign or
-versioned binary SDK release. The measurements below retain their original candidates.
+These render-throughput measurements do not qualify the 1080p60 SDK bundles or
+establish 4K120 HDMI output. The September 7 milestones below retain their original
+candidates and decisions; later acceptance does not rewrite those receipts.
+
+## Display negotiation audit (September 8, local)
+
+The historical mismatch below is preserved. Later same-binary tests resolved
+the connection-path limitation and verified native 1440p120 and 4K120; see
+[the qualification summary](#native-1440p120-and-4k120-qualification-september-8).
+
+G24's new 2160p120 build of the G19 graphics logic rendered **3840x2160 at
+119.884 FPS** for 30 seconds (completed-frame p95 **9.178 ms**). Both VideoOut
+snapshots reported 3840x2160/119.88, but the same title's HDMI negotiation was
+**1920x1080 at 119.88 Hz**, followed by restoration to 3840x2160/59.94 at exit.
+Rendering, cleanup, service health and exact-token release passed. The distinction
+is now checked by `tools/summarize-display.py`, not inferred from buffer size.
+
+This is a verified console-log mismatch, not a 4K120 HDMI success or a renderer
+failure. Direct TV/capture-device signal confirmation and the current connection
+path remain unverified; no cause or forced-mode fix is claimed. The saved older
+standalone ImGui receipt shows the same mismatch; a separate older ProsperoLight
+receipt demonstrates 2160p119.88 negotiation under its then-current setup.
+Neither receipt establishes the capabilities of today's connected display path.
+Source companion `3c92754`, exact app/SDK identity in `.local/g24-candidate.json`,
+hashed native evidence in `results/g24-display-20260908/display-report.json`.
+The accepted 1080p60 SDK bundles remain unchanged.
+
+## Native 1440p120 and 4K120 qualification (September 8)
+
+One firmware-6.02 console, connected to HDMI4 on a Hisense 55U78N, ran the
+unchanged frozen G31 ImGui apps. Each measured 3,597 frames after warm-up:
+
+| Native render size | Measured seconds | Completed FPS | Negotiated HDMI | Restored HDMI |
+| --- | ---: | ---: | --- | --- |
+| 2560x1440 | 30.004589 | 119.881660 | 2560x1440, 119.88 Hz | 2560x1440, 59.94 Hz |
+| 3840x2160 | 30.004094 | 119.883639 | 3840x2160, 119.88 Hz | 3840x2160, 59.94 Hz |
+
+Both ImGui pixel oracles passed. The matching frozen SDL2 apps separately
+completed 180 frames and two exact pixel probes at each size, with the same
+negotiated/restored HDMI modes. All four native cycles closed cleanly and
+passed service-health and exact-token-release checks. SDL's nominal 120 Hz
+profile is not a measured SDL frame-rate result.
+
+The same 4K app had previously negotiated 1080p120 on HDMI1. Moving the cable
+to HDMI4 enabled 4K120 without rebuilding the app or changing its metadata.
+Native 1440p then required the owner's 1440p output selection. This separates
+render dimensions, physical-link negotiation and completed-frame throughput;
+neither an app overlay nor a TV refresh-only game bar proves input resolution.
+The [qualification record](high-resolution-120-plan.md) preserves the comparison,
+official display references and evidence boundaries. Per-run TV refresh
+observations remain separate from these console HDMI logs.
+
+### Frozen identities
+
+The ImGui build source is `3cdc90bbc14def6bc3025b4460fba0892841114a`; SDL profile
+integration is `ac2a52aa7faac5e7b9bcd6660cee36263f3e5324`. Later source companions
+record the hardware runs, not rebuilt artifacts. SHA-256 identities:
+
+| Artifact | 1440p120 | 2160p120 |
+| --- | --- | --- |
+| GL SDK manifest | `d2d6169960d379f3987b8b7c3b8f81cf05f97072cdfa67eaba393fc82e327567` | `2785038b1020824a882e533b874bb7658e6f41210e689a79ccd363ffc3af1b61` |
+| GL runtime archive | `b7f3ca590d9befa516691b893617d8ae049ce187c47737aad041c5788b93fabe` | `83a8f4729bafcb0b61be6e4b96f1603c1d682b26243f47475cff2d2af7353374` |
+| ImGui executable | `1860dc15b22a064136fcf9b9de79c262f339dd1e426a9eb3363b550c09bfcb90` | `91f2d5cd08d3e7f46e85c8396c1ba5511de874d8a807e77f9c5ab5c2a8905fc0` |
+| SDL2 executable | `63baeb465b89a04f8569d04e50f122a42c253df3bd020256e905a61e58184296` | `5578cbb4b40725dfb21918ebea967209753af4ff34442d45a2e15609674f5ff5` |
+
+This publishes source support and scoped findings, not replacement SDK downloads.
+It does not establish arbitrary-game FPS, perfect pacing, HDR rendering accuracy,
+long high-resolution sessions or a new full CTS campaign. Existing G25 releases
+and historical validation retain their own identities. Raw logs remain local.
+
+## Broader format and subresource coverage (G25, local)
+
+The new sRGB candidate reuses native tiled storage for **single-mip, single-layer
+2D RGBA8 sRGB** render/sample textures. It preserves existing format support,
+size, sample-count and ownership guards. Other formats, mip chains and layers
+retain their existing staging paths. BGRA support was not inferred from RGBA's
+four-byte layout.
+
+Both frozen SDKs passed the same native batch: 20 render formats, three MRT
+phases, two full-image sRGB phases (masked clear, partial upload, draw/sample,
+raw readback, blit and copy), then seven measured cases with **336 sampled pixel
+checks** including untouched mip/layer guards. The combined test reuses the
+existing format gate and runs once per SDK, not once per case.
+
+Each cycle draws a source image, copies a subrectangle, uploads one pixel,
+draws a scissored patch into the tested texture, samples it, and calls `glFinish`.
+These are **completed composite cycles/s, not presentation or game FPS**:
+
+| 256×144 tested image | Frozen G19 | G25 sRGB candidate |
+| --- | ---: | ---: |
+| RGBA8 2D | 30.145 | 29.981 |
+| sRGB8-alpha8 2D | 19.985 | 19.986 |
+| R8 2D | 19.981 | 19.977 |
+| RGBA16F 2D | 19.984 | 19.981 |
+| RGBA8 2D, mip 1 | 19.988 | 19.979 |
+| RGBA8 array, layer 1 | 19.987 | 19.981 |
+| RGBA8 3D, layer 1 | 19.981 | 19.985 |
+
+**No measurable sRGB throughput gain in this workload.** Removing its per-draw
+staging copies is functionally verified, but these composite measurements do
+not isolate copy, draw or synchronization costs. Four warmup cycles and one
+three-second measurement per case provide no repeatability/error bars. Pixel
+oracles run before/after timing, with byte-readback tolerance ±1; this does not
+measure float precision or validate every measured frame.
+
+The initial 640×360 batch passed six cases, then correctly rejected a 3D image
+larger than this runtime's 256-pixel limit. Its failed receipt remains preserved.
+Version 3 uses a common valid footprint and checks public resource limits before
+allocating. Both corrected native cycles passed teardown, service health and
+exact-token release. No GPU fault was recorded. This is focused qualification,
+not a new CTS campaign, long soak or qualification of the unchanged SDK bundles.
+
+```sh
+make test
+PS5_OPENGL_PREFIX=/path/to/frozen/sdk make test-staging
+PS5_OPENGL_PREFIX=/path/to/frozen/sdk \
+  bash tools/build-native-test-app.sh egl_public_core33_staging_regressions
+python3 tools/summarize-staging-profile.py EXACT-opengl.log
+```
+
+Use the existing locked native-folder protocol with a 90-second observation cap;
+the profile parser checks benchmark records, not title teardown. Source companion
+`e7b013e`, exact identities in `.local/g25-v3-candidate.json`; accepted receipts
+under `results/g25-v3-staging-{control,candidate}-20260908/`. The candidate SDK is
+`build/sdk/ps5-opengl-core33-g25-srgb`. Transfer-heavy GPU paths and broader
+native-layout coverage remain optimization work; do not present them as missing
+Core 3.3 functions solely because they use the CPU.
 
 ## Frozen validation-baseline measurements
 
@@ -43,6 +171,8 @@ cube's 180 frames and 2,596 checks with a live 8.3 MB heap readback allocation.
 
 ## Release defaults
 
+These defaults describe the September 7 full-campaign SDK.
+
 - Eligible ordinary and multi-draw work is grouped into bounded batches of up
   to eight draws. Private descriptors, retained resources and explicit drain
   boundaries preserve ordering. Ineligible state remains synchronous.
@@ -63,7 +193,7 @@ PS5_DEFERRED_DRAW_BATCH=0 PS5_MULTIDRAW_BATCH=0 make sdk
 Configuration changes invalidate the affected runtime objects automatically.
 Do not rebuild a frozen SDK during its hardware campaign.
 
-## Remaining performance work
+## September 7 performance development (historical)
 
 Clear and presentation waits still dominate the small examples. Broader
 submission coalescing, transfer/format acceleration and real-application profiling
@@ -521,7 +651,7 @@ correctness checks; do not use its results as the windowed control or rerun its
 full matrix before the slow path improves. Textured 3D and heavier workloads
 also remain unmeasured, separate follow-ups.
 
-## OpenGL-only follow-up order
+## September 7 OpenGL-only follow-up order (historical)
 
 G6 starts with full-port shutdown: retain bounded GPU/flip retirement and output
 restoration, then close the owned VideoOut handle without first unregistering
@@ -786,8 +916,8 @@ See the [bundle guide](sdk-bundle.md); exact hashes and local receipts are in
    remain separate, unvalidated features.
 3. Use application findings from the separate Yamagi port as library bug reports;
    no game-specific changes belong in this repository's driver.
-4. Define the actual SDL/GLFW platform boundary from consumer requirements before
-   implementing an adapter. Neither framework is currently supported.
+4. Extend the [fixed-profile SDL2 bridge](../integration/SDL2/README.md) only against
+   concrete consumer requirements. GLFW and a complete SDL platform port remain absent.
 5. Repeat independent builds and fresh TV/controller checks. Keep one-console,
    one-firmware results explicitly scoped; broader compatibility needs new evidence.
 6. The [sample-validated SDK/source-example prerelease](sdk-bundle.md) packages

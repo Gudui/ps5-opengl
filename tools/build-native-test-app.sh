@@ -117,15 +117,32 @@ else
     make -C "$root/tests/ps5" --no-print-directory -j8 \
         PS5_PAYLOAD_SDK="$sdk" "$gate_object"
     gate_object_path="$root/tests/ps5/$gate_object"
-    make -C "$root/tests/ps5" --no-print-directory -f native-app.mk -j8 \
-        PS5_PAYLOAD_SDK="$sdk" runtime
-    mapfile -t static_libraries < <(
-        make -C "$root/tests/ps5" --no-print-directory -s -f native-app.mk \
-            PS5_PAYLOAD_SDK="$sdk" print-static-libs
-    )
-    public_headers="$root/third_party/mesa-26.2.0/include"
+    if [[ -n ${PS5_OPENGL_PREFIX:-} ]]; then
+        prefix=$(realpath -e -- "$PS5_OPENGL_PREFIX")
+        (cd "$prefix" && sha256sum --check --strict manifest.sha256 >/dev/null)
+        static_libraries=("$prefix/lib/libPS5OpenGLCore33.a")
+        public_headers="$prefix/include"
+    else
+        make -C "$root/tests/ps5" --no-print-directory -f native-app.mk -j8 \
+            PS5_PAYLOAD_SDK="$sdk" runtime
+        mapfile -t static_libraries < <(
+            make -C "$root/tests/ps5" --no-print-directory -s -f native-app.mk \
+                PS5_PAYLOAD_SDK="$sdk" print-static-libs
+        )
+        public_headers="$root/third_party/mesa-26.2.0/include"
+    fi
 fi
 test -s "$gate_object_path"
+display_fps=${PS5_SCANOUT_FPS:-60}
+if [[ -n ${prefix:-} && -f $prefix/include/ps5_opengl_display.h ]]; then
+    display_fps=$(python3 -c 'import importlib, sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; print(importlib.import_module("check-sdk-consumers").display_profile(Path(sys.argv[2]))["fps"])' "$root/tools" "$prefix")
+elif [[ ${PS5_IMGUI_WINDOW_TARGET:-60} -gt 60 ]]; then
+    display_fps=120 # Legacy high-refresh SDKs have no profile header.
+fi
+case "$display_fps" in 60|120) ;; *) echo 'Invalid SDK presentation rate' >&2; exit 2 ;; esac
+if [[ ${PS5_IMGUI_WINDOW_TARGET:-60} -gt "$display_fps" ]]; then
+    echo 'Window benchmark target exceeds the selected SDK presentation rate' >&2; exit 2
+fi
 oracle=$(strings "$gate_object_path" | grep -m1 -E '^\[ps5-' || true)
 compiler=${PS5_CLANG:-clang-18}
 compiler_runtime=$(
@@ -168,6 +185,10 @@ rm -rf -- "$app/src" "$app/include" "$app/vendor"
 mkdir -p "$app/src" "$app/include" "$app/vendor"
 cp "$root/native-app/runtime_shims.c" "$app/src/runtime_shims.c"
 cp "$root/native-app/app_heap.c" "$app/src/app_heap.c"
+if [[ ${PS5_GPU_MEMORY_PROFILE:-0} == 1 ]]; then
+    cp "$root/native-app/gpu_memory.c" "$app/src/gpu_memory.c"
+    sed -i 's/--wrap=malloc /--wrap=sceKernelAllocateDirectMemory --wrap=sceKernelMapDirectMemory --wrap=sceKernelReleaseDirectMemory --wrap=munmap --wrap=malloc /' "$link_script"
+fi
 for headers in EGL GL KHR; do
     cp -a "$public_headers/$headers" "$app/include/"
 done
@@ -183,15 +204,15 @@ metadata['contentId'] = metadata['contentId'].replace('PPSA99005', sys.argv[2])
 metadata['localizedParameters']['en-US']['titleName'] = sys.argv[3]
 path.write_text(json.dumps(metadata, indent=2) + '\n')
 TITLE_METADATA
-if [[ ${PS5_IMGUI_WINDOW_TARGET:-60} -gt 60 ]]; then
+if [[ $display_fps -gt 60 ]]; then
     # Ordinary high-resolution/HFR title metadata, matching the native VideoOut request.
-    python3 - "$app/sce_sys/param.json" <<'HFR_METADATA'
+    python3 - "$app/sce_sys/param.json" "$title_id" <<'HFR_METADATA'
 import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 metadata = json.loads(path.read_text())
-assert metadata["titleId"] == "PPSA99005" and metadata["attribute3"] == 0
+assert metadata["titleId"] == sys.argv[2] and metadata["attribute3"] == 0
 metadata["attribute3"] = 0x80040
 path.write_text(json.dumps(metadata, indent=2) + "\n")
 HFR_METADATA

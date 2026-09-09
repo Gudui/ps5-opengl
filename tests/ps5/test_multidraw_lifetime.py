@@ -311,8 +311,8 @@ print(f"PASS: staged ownership, 1..{capacity} draws, all-marker retirement, shar
 
 # Exercise the real Gallium wrapper too: ownership must survive command staging.
 source = (root / "src/gallium/ps5/ps5_screen.c").read_text()
-cache_start = source.index("struct ps5_depth_flush_cache {")
-depth_cache_type = source[cache_start:source.index("\n};", cache_start) + 3]
+cache_start = source.index("struct ps5_batch_flush_cache {")
+flush_cache_type = source[cache_start:source.index("\n};", cache_start) + 3]
 start = source.index("static bool\nps5_multidraw_eligible(")
 body = source[start:source.index("\n#endif", start)]
 code = r'''
@@ -328,7 +328,7 @@ code = r'''
 #define PS5_RENDER_ARENA_OFFSET (2u * 0xa00000u)
 enum { PIPE_MAX_ATTRIBS=16, PS5_MAX_CONSTANT_BUFFERS=13, PS5_MAX_TEXTURE_UNITS=16, PIPE_BUFFER=1,
        PIPE_TEXTURE_2D=2, PIPE_FORMAT_R8G8B8A8_UNORM=1, MESA_PRIM_TRIANGLES=4, MESA_PRIM_TRIANGLE_FAN=5, PIPE_BIND_DISPLAY_TARGET=1,
-       PIPE_FORMAT_Z32_FLOAT=77, PIPE_FORMAT_Z32_FLOAT_S8X24_UINT=78 };
+       PIPE_FORMAT_Z32_FLOAT=77, PIPE_FORMAT_Z32_FLOAT_S8X24_UINT=78, PIPE_BIND_RENDER_TARGET=2 };
 struct pipe_resource { unsigned target, format, nr_samples, nr_storage_samples, refs, last_level, bind; };
 struct pipe_sampler_view { struct pipe_resource *texture; unsigned target, format;
     union { struct { unsigned first_level, last_level, first_layer, last_layer; } tex; } u; };
@@ -427,10 +427,10 @@ static int end(void) {
 }
 static int (*ps5_agc_gate2_batch_begin)(void)=begin;
 static int (*ps5_agc_gate2_batch_end)(void)=end;
-''' + depth_cache_type + r'''
+''' + flush_cache_type + r'''
 static void ps5_draw_vbo_locked(struct pipe_context *b, const struct pipe_draw_info *info, unsigned id,
     const struct pipe_draw_indirect_info *indirect, const struct pipe_draw_start_count_bias *draw, unsigned n,
-    struct ps5_depth_flush_cache *depth_cache) {
+    struct ps5_batch_flush_cache *flush_cache) {
     struct ps5_context *drawing=(struct ps5_context *)b;
     assert((b == &context.base || deferred_mode) && info && !indirect && n==1 && draw->count && locked);
     assert(id == 20 + (info->increment_draw_id ? draw->start : 0));
@@ -439,12 +439,13 @@ static void ps5_draw_vbo_locked(struct pipe_context *b, const struct pipe_draw_i
     if ((int)calls++ == fail_draw) { drawing->last_draw_status=-9; return; }
     assert(staged < PS5_MULTIDRAW_BATCH_CAPACITY);
     /* Model a backing flush: cache ownership ends at EVERY batch boundary. */
-    assert(depth_cache);
-    if (!staged) assert(!depth_cache->data[0] && !depth_cache->data[1] &&
-                        !depth_cache->size[0] && !depth_cache->size[1]);
-    else assert(depth_cache->data[0] == &borrowed && depth_cache->size[0] == begun);
-    depth_cache->data[0] = &borrowed;
-    depth_cache->size[0] = begun;
+    assert(flush_cache);
+    for (unsigned unit = 0; unit < 2 + PS5_MAX_TEXTURE_UNITS; ++unit) {
+        if (!staged) assert(!flush_cache->data[unit] && !flush_cache->size[unit]);
+        else assert(flush_cache->data[unit] == &borrowed && flush_cache->size[unit] == begun);
+        flush_cache->data[unit] = &borrowed;
+        flush_cache->size[unit] = begun;
+    }
     pending[staged][0]=(struct ps5_resource *)drawing->vertex_descriptor_table;
     pending[staged][1]=(struct ps5_resource *)drawing->descriptor_storage[0];
     pending[staged][2]=(struct ps5_resource *)drawing->descriptor_storage[1];
@@ -555,7 +556,11 @@ int main(void) {
     assert(!ps5_multidraw_eligible(&context,&info,NULL,draws,TEST_DRAWS)); textures[7]=saved; } while(0)
     REJECT_TEX(base.target,PIPE_BUFFER); REJECT_TEX(base.format,2); REJECT_TEX(base.nr_samples,4);
     REJECT_TEX(base.nr_storage_samples,4); REJECT_TEX(base.last_level,1); REJECT_TEX(base.bind,1);
-    REJECT_TEX(base.bind,2); REJECT_TEX(depth_staging_size,1); REJECT_TEX(data,NULL); REJECT_TEX(size,0);
+    REJECT_TEX(depth_staging_size,1); REJECT_TEX(data,NULL); REJECT_TEX(size,0);
+    textures[7].base.bind=PIPE_BIND_RENDER_TARGET;
+    textures[7].render_staging_size=0;
+    assert(ps5_multidraw_eligible(&context,&info,NULL,draws,TEST_DRAWS));
+    textures[7].base.bind=0;
 #define REJECT_VIEW(field,value) do { struct pipe_sampler_view saved=views[7]; views[7].field=value; \
     assert(!ps5_multidraw_eligible(&context,&info,NULL,draws,TEST_DRAWS)); views[7]=saved; } while(0)
     REJECT_VIEW(texture,&borrowed.base); REJECT_VIEW(texture,NULL); REJECT_VIEW(target,PIPE_BUFFER);
@@ -572,8 +577,8 @@ with tempfile.TemporaryDirectory() as tmp:
                    input=code, text=True, check=True)
     subprocess.run([str(exe)], check=True, stdout=subprocess.DEVNULL)
     mutations = (
-        ("   for (unsigned first = 0; first < num_draws;) {\n      struct ps5_depth_flush_cache depth_cache = {0};",
-         "   struct ps5_depth_flush_cache depth_cache = {0};\n   for (unsigned first = 0; first < num_draws;) {"),
+        ("   for (unsigned first = 0; first < num_draws;) {\n      struct ps5_batch_flush_cache flush_cache = {0};",
+         "   struct ps5_batch_flush_cache flush_cache = {0};\n   for (unsigned first = 0; first < num_draws;) {"),
         ("ps5_shader_texture_count(context->vs) ||",
          "ps5_shader_texture_count(context->vs) || ps5_shader_texture_count(context->fs) ||"),
         ("pipe_resource_reference(&retained[retained_count++], context->sampler_views[1][unit]->texture);",
@@ -783,9 +788,9 @@ with tempfile.TemporaryDirectory() as tmp:
             assert candidate != deferred_code
         if mutate == 2:
             candidate = candidate.replace("   memset(&ps5_deferred, 0, sizeof(ps5_deferred));",
-                "   struct ps5_depth_flush_cache stale = ps5_deferred.depth_cache;\n"
+                "   struct ps5_batch_flush_cache stale = ps5_deferred.flush_cache;\n"
                 "   memset(&ps5_deferred, 0, sizeof(ps5_deferred));\n"
-                "   ps5_deferred.depth_cache = stale;")
+                "   ps5_deferred.flush_cache = stale;")
             assert candidate != deferred_code
         subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", *flags,
                         "-I" + str(root / "src/gallium/ps5"), "-x", "c", "-o", str(exe), "-"],

@@ -19,28 +19,64 @@ four-configuration campaign and installed-SDK renderer checks. Later performance
 changes have focused regressions, not a new full CTS campaign; see the
 [frozen identity](docs/validation.md#frozen-identity-and-defaults).
 
-**SDK prerelease:** [0.1.0-perf20260907-sampled](https://github.com/blackbearreloaded/ps5-opengl/releases/tag/v0.1.0-perf20260907-sampled)
-contains the frozen 1080p60 performance SDK, source examples/dependencies, licenses
-and checksums. This candidate passed **204/204 sampled executions**, not a new
-full CTS campaign. See the [bundle guide](docs/sdk-bundle.md) for its exact scope.
+**Latest consolidated SDK:** [G25 + SDL2 prerelease](https://github.com/blackbearreloaded/ps5-opengl/releases/tag/sdk-0.1.0-perf20260908-g25-sdl2-sampled) combines the
+frozen 1080p60 graphics runtime with a verified, relocatable SDL2 payload.
+It passed **204/204 sampled executions**, matched offscreen/3D profiles,
+bounded stability and a fresh native SDL2 example—not a new full CTS campaign.
+Download compiled libraries, complete sources, licenses, checksums and the
+extraction report; read the [bundle guide](docs/sdk-bundle-g25.md) for exact scope.
+The [September 7 prerelease](https://github.com/blackbearreloaded/ps5-opengl/releases/tag/v0.1.0-perf20260907-sampled)
+remains unchanged.
 
 **Current-source SDK builds:** [GitHub Actions](.github/workflows/release.yml)
 produces compiled SDK archives with sources, notices, checksums and provenance.
 These fresh binaries are **host-checked, not console-validated**; see
-[downloads and release procedure](docs/ci-releases.md). The older prerelease above
-is not rebuilt or replaced.
+[downloads and release procedure](docs/ci-releases.md). These are separate from
+the frozen sample-validated archives and do not replace them.
 
-**Latest performance:** the opt-in windowed ImGui benchmark averages **119.88 FPS
-at 1080p, 1440p and 4K**, measured for 30 seconds per size. See the
+**September 8 source update:** this branch includes the later offscreen/copy
+fixes, [display-negotiation audit](docs/performance.md#display-negotiation-audit-september-8-local),
+[sRGB storage and seven-case staging checks](docs/performance.md#broader-format-and-subresource-coverage-g25-local),
+and [SDL2 integration](integration/SDL2/README.md). The G25 distribution has its
+own fresh focused acceptance; raw console receipts remain local. Existing
+downloads are unchanged.
+
+**Earlier high-refresh benchmark (September 7):** the opt-in windowed ImGui
+benchmark averages **119.88 FPS at 1080p, 1440p and 4K**, measured for 30 seconds
+per size. See the
 [results and limits](docs/performance.md#g5d-verified-high-resolution-120-fps-candidate)
 and [benchmark build instructions](examples/core33-imgui/README.md#high-refresh-window-benchmark-opt-in).
-This is small-scene throughput, not a guarantee of game FPS or perfect frame pacing.
+These are render sizes, not verified HDMI modes. This is small-scene throughput,
+not a guarantee of game FPS or perfect frame pacing.
+The [September 8 display audit](docs/performance.md#display-negotiation-audit-september-8-local)
+reproduces 4K rendering at 119.884 FPS but records **1080p120 HDMI negotiation**;
+independent TV/capture-device verification remains separate.
 
-**Latest focused checks:** the matched 1080p offscreen workload improved from
-14.10 to **19.98 FPS**. A ten-minute TV-demo session sustained approximately
-**59.90 FPS**, and **five native launch/exit cycles** passed without post-session
-owned-heap growth. These are bounded results, not exhaustive stability or OOM
-coverage; see [offscreen and stability findings](docs/offscreen-stability.md).
+**Verified high-resolution output (September 8):** on the tested
+Hisense HDMI4 connection, the unchanged frozen apps now verify **native 1440p120
+and 4K120 HDMI output**. The 30-second ImGui runs measured **119.882 FPS at
+2560x1440** and **119.884 FPS at 3840x2160**, with matching 119.88 Hz HDMI logs.
+Both SDL2 profiles passed 180 frames/two exact pixels; all four cycles restored
+normal output and closed cleanly. Native 1440p required the owner's 1440p output
+selection. See [qualification and limits](docs/high-resolution-120-plan.md).
+The tested artifacts remain local: these are not new downloads, full-game FPS guarantees,
+an SDL FPS measurement or an extended high-resolution soak.
+
+**Current G25 acceptance (September 8):** this successor retains the nonzero-mip
+copy and color-blit fixes, and adds sRGB storage eligibility. It passes a fresh
+**204/204 execution sample**, a ten-minute zero-growth tracked-memory soak,
+three EGL sessions in one lifecycle run, and the native SDL2 example.
+Matched 1080p profiles reach **59.95 FPS offscreen** and **59.94 FPS in both
+128-cube modes**. The [G25 guide](docs/sdk-bundle-g25.md) records exact identities
+and limits. The [earlier local G19 bundles](docs/sdk-bundle-g19.md) retain their
+separate acceptance, including the older game replay.
+
+**Earlier local G13 measurements:** the matched 1080p single-mip 2D RGBA8 offscreen
+workload improved from 19.98 to **59.95 FPS** (p95 17.20 ms). A ten-minute soak and
+**204/204 focused conformance executions** passed without steady tracked memory
+growth. Those original receipts apply to G13; G19 has its own checks above;
+see [offscreen and stability findings](docs/offscreen-stability.md). Manual
+4K-app startup/input acceptance remains separate; exhaustive stability is not claimed.
 
 ## Project Foundation
 
@@ -127,7 +163,12 @@ then launch its registered title. Do not send the application executable to an
 ELF loader. Each TV-demo launch runs for five minutes.
 
 Existing projects still need PS5 entry-point, build, window/input and lifecycle
-integration. The SDK does not replace GLX, WGL, SDL or GLFW platform code.
+integration. An experimental [SDL2 bridge](integration/SDL2/README.md) now supports standard
+SDL window/context/swap/event calls over a supplied verified SDK; its distributed
+G25 pair passed 180 native frames and two pixel checks at fixed 1080p. Local
+profile-bearing SDKs additionally qualify fixed 1440p120 and 2160p120; one window
+and one Core 3.3 context remain the boundary, not a complete SDL platform port.
+GLX, WGL and GLFW integration remain absent.
 
 ## Documentation
 
@@ -135,14 +176,17 @@ integration. The SDK does not replace GLX, WGL, SDL or GLFW platform code.
 | --- | --- |
 | [Building](docs/building.md) | Dependencies, source setup, SDK and native apps |
 | [Using the SDK](docs/consumer-build.md) | Make, pkg-config and CMake integration |
+| [SDL2 integration](integration/SDL2/README.md) | Real SDL2 video bridge, standard consumer, native evidence and limits |
+| [G25 + SDL2 SDK](docs/sdk-bundle-g25.md) | Consolidated 1080p60 distribution, fresh focused acceptance and consumer instructions |
 | [Sample-validated SDK bundle](docs/sdk-bundle.md) | Frozen 1080p60 package contents, verification and scope |
+| [Local G19 SDK bundles](docs/sdk-bundle-g19.md) | Copy fixes, focused sample, performance and bounded stability; not published |
 | [CI-built SDK archives](docs/ci-releases.md) | Current-source builds, checksums and draft-release workflow |
 | [Architecture](docs/architecture.md) | Frontend, shader compiler, driver and platform boundaries |
 | [Testing](docs/testing.md) | Host checks, bounded hardware cases and acceptance |
 | [Validation report](docs/validation.md) | Exact results, identity and exceptions |
 | [Limitations](docs/limitations.md) | Compatibility, performance and hardware scope |
 | [Performance](docs/performance.md) | Measured bottlenecks, GPU acceleration candidates and validation boundaries |
-| [Offscreen and stability](docs/offscreen-stability.md) | Later copy optimization, ten-minute soak and five launch/exit checks |
+| [Offscreen and stability](docs/offscreen-stability.md) | G13 native storage, bounded G15/G16 memory checks and historical G9/G10 results |
 | [Contributing](CONTRIBUTING.md) | Changes, regression selection and reporting |
 | [Third-party notices](THIRD_PARTY_NOTICES.md) | Upstream projects, licenses and source pins |
 
