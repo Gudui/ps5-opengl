@@ -56,8 +56,8 @@ gate=$(tr -d '\r\n' < "$selected")
     printf 'invalid selected gate: %s\n' "$gate" >&2
     exit 1
 }
-grep -aFq '[pss-opengl-native] gate completed status=%d' "$linked"
 if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o ]]; then
+    grep -aFq '[pss-opengl-native] gate completed status=%d' "$linked"
     for marker in OGL2_MAIN_ENTER OGL2_RUN_COMPLETE OGL2_EGL_TEARDOWN_OK OGL2_EXIT_REQUEST_BEGIN "$title_id"; do
         grep -aFq "$marker" "$linked"
     done
@@ -70,7 +70,8 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
     fi
     readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
 else
-    grep -aFq '/download0/pss-opengl.log' "$linked"
+    grep -aFq '[ps5-opengl-native] gate completed status=%d' "$linked"
+    grep -aFq '/download0/ps5-opengl.log' "$linked"
 fi
 # Drain producers under pipefail: grep -q can otherwise make nm/readelf SIGPIPE.
 nm -u "$linked" | grep -F 'sceAgcDcbSetNumInstances' >/dev/null

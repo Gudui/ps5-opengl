@@ -12,7 +12,9 @@ import collections
 import json
 import re
 import shlex
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from opengl_receipts import CTS_QPA_SUFFIXES, cts_receipt_parts
 
 
 CASE = re.compile(
@@ -67,9 +69,9 @@ def summarize(text: str, expected: list[str] | None = None) -> dict:
 def inventory(directory: Path, current_eboot: str | None) -> dict:
     # Development evidence only: never turn an old binary's pass into a new pass.
     import importlib
-    configurations = importlib.import_module("prepare-cts-shard").CONFIGURATIONS
+    prepare = importlib.import_module("prepare-cts-shard")
     latest, receipts, rejected = {}, {}, []
-    for path in sorted(directory.rglob("*-pss-opengl-cts.qpa"), key=lambda p: p.name):
+    for path in sorted((p for p in directory.rglob("*.qpa") if p.name.endswith(CTS_QPA_SUFFIXES)), key=lambda p: p.name):
         try:
             text = path.read_text(errors="replace")
             command = re.search(r'^#sessionInfo commandLineParameters "(.*)"$', text, re.M)
@@ -81,10 +83,9 @@ def inventory(directory: Path, current_eboot: str | None) -> dict:
                          int(options["--deqp-base-seed"]),
                          options.get("--deqp-surface-type", "default"),
                          options.get("--deqp-gl-config-name", "default"))
-            config = next(i for i, (w, h, seed, extra) in enumerate(configurations)
-                          if signature == (w, h, seed, "fbo" if extra else "default",
-                                           "rgba8888d24s8" if extra else "default"))
-            prefix = str(path).removesuffix("-pss-opengl-cts.qpa")
+            # Timing history is not acceptance; retain the actual requested surface.
+            config = prepare.configuration_index(signature, allow_implicit_pbuffer=True)
+            prefix, _ = cts_receipt_parts(path)
             case_list = Path(prefix + "-cts-shard.txt")
             expected = [s.strip() for s in case_list.read_text().splitlines() if s.strip()] if case_list.is_file() else None
             summary = summarize(text, expected)
@@ -97,7 +98,8 @@ def inventory(directory: Path, current_eboot: str | None) -> dict:
             receipt_id = path.relative_to(directory).as_posix()
             receipts[receipt_id] = dict(
                 eboot_sha256=eboot, libc_sha256=lifecycle.get("libcSha256", "").lower(),
-                configuration=config, complete=summary["complete"], ordered_inputs=expected is not None,
+                configuration=int(config), requested_surface=signature[3],
+                complete=summary["complete"], ordered_inputs=expected is not None,
                 teardown=lifecycle.get("teardownSignal"),
                 entered=lifecycle.get("outcome") == "entered-eboot",
                 current_binary=bool(current_eboot and eboot == current_eboot.lower()),
@@ -123,6 +125,37 @@ def inventory(directory: Path, current_eboot: str | None) -> dict:
                 receipts=receipts, timings=timings, rejected=rejected)
 
 
+def egl_configuration_inventory(text: str) -> dict:
+    """Keep upstream results intact; reject synthetic defaults as EGL coverage."""
+    summary = summarize(text, ["CTS-Configs.gl33"])
+    if not summary["complete"] or summary["counts"] != {"Pass": 1}:
+        raise ValueError("EGL inventory requires one complete passing CTS-Configs.gl33 case")
+    try:
+        root = ET.fromstring(next(CASE.finditer(text)).group("body").strip())
+    except ET.ParseError as error:
+        raise ValueError(f"invalid EGL inventory XML: {error}") from error
+    configs = root.findall("./Section[@Name='Configs']")
+    excluded = root.findall("./Section[@Name='ExcludedConfigs']")
+    if len(configs) != 1 or len(excluded) != 1:
+        raise ValueError("EGL inventory requires Configs and ExcludedConfigs sections")
+    entries = ["".join(node.itertext()).strip() for node in configs[0].findall("Text")]
+    errors, eligible = [], []
+    for entry in entries:
+        match = re.fullmatch(r"EGL\(([1-9][0-9]*)\): (.+)", entry)
+        surfaces = match[2].split(", ") if match else []
+        if not surfaces or not set(surfaces) <= {"window", "pixmap", "pbuffer"}:
+            errors.append(f"not a real EGL configuration: {entry}")
+        elif int(match[1]) in {config["id"] for config in eligible}:
+            errors.append(f"duplicate EGL configuration: {entry}")
+        else:
+            eligible.append(dict(id=int(match[1]), surfaces=surfaces))
+    if not eligible:
+        errors.append("no eligible real EGL configurations")
+    return dict(eligible=eligible, excluded=["".join(node.itertext()).strip()
+                                           for node in excluded[0].findall("Text")],
+                errors=errors)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("qpa", type=Path, nargs="?")
@@ -132,9 +165,11 @@ def main() -> int:
     parser.add_argument("--inventory", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--current-eboot-sha256")
+    parser.add_argument("--require-egl-configs", action="store_true",
+                        help="require real EGL inventory from CTS-Configs.gl33, not a synthetic default")
     arguments = parser.parse_args()
     if arguments.inventory:
-        if arguments.qpa or not arguments.output or not arguments.inventory.is_dir():
+        if arguments.qpa or arguments.require_egl_configs or not arguments.output or not arguments.inventory.is_dir():
             parser.error("inventory requires an existing directory, --output, and no QPA argument")
         ledger = inventory(arguments.inventory, arguments.current_eboot_sha256)
         arguments.output.write_text(json.dumps(ledger, indent=2) + "\n")
@@ -145,7 +180,10 @@ def main() -> int:
         parser.error("a QPA receipt or --inventory is required")
     expected = [s.strip() for s in arguments.expected_list.read_text().splitlines() if s.strip()] if arguments.expected_list else None
     try:
-        summary = summarize(arguments.qpa.read_text(errors="replace"), expected)
+        text = arguments.qpa.read_text(errors="replace")
+        summary = summarize(text, expected)
+        if arguments.require_egl_configs:
+            summary["egl_configs"] = egl_configuration_inventory(text)
     except ValueError as error:
         parser.error(str(error))
     if not arguments.details:
@@ -160,8 +198,11 @@ def main() -> int:
         )
         for name in summary["failed"]:
             print(f"failed={name}")
+        for error in summary.get("egl_configs", {}).get("errors", []):
+            print(f"egl_inventory_error={error}")
 
-    return 1 if not summary["complete"] or summary["failed"] else 0
+    return 1 if (not summary["complete"] or summary["failed"] or
+                 summary.get("egl_configs", {}).get("errors")) else 0
 
 
 if __name__ == "__main__":

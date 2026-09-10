@@ -1,6 +1,6 @@
 # Building
 
-Build on x86-64 Linux or WSL. A [frozen sample-validated SDK](sdk-bundle.md)
+Build on x86-64 Linux or WSL. A [prebuilt SDK](release-g62.md)
 is available separately. [GitHub Actions](ci-releases.md) can also build fresh
 SDK archives; those binaries are host-checked, not console-validated. Neither
 package includes ready-to-launch applications.
@@ -26,10 +26,14 @@ paths. Upstream commits and archive hashes are pinned in
 Place the repositories alongside each other:
 
 ```sh
-git clone https://github.com/blackbearreloaded/ps5-native-app-boilerplate.git ../ps5-native-app-boilerplate
-git -C ../ps5-native-app-boilerplate checkout 4e1d1277dd0531a9a9df8c780e446b9cc26534dd
+git clone https://github.com/Gudui/ps5-native-app-boilerplate.git ../ps5-native-app-boilerplate
+git -C ../ps5-native-app-boilerplate checkout c693b0ae0c0feca8cc13a6010a588d0e325490ac
 bash ../ps5-native-app-boilerplate/tools/setup-native-dependencies.sh
 ```
+
+This maintained fork retains the firmware-5.50 campaign converter correction
+at the pinned boilerplate descendant above; it does not adopt the upstream
+documentation's boilerplate revision.
 
 Its setup verifies the SDK v0.42 archive and prepares build-time dependencies.
 For another layout, set `PS5_NATIVE_APP_TEMPLATE` to its absolute path; Make

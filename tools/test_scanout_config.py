@@ -170,6 +170,7 @@ int main(void) {
     assert(runtime_video_configure_output() == 0 && runtime_output_needs_restore);
     assert(runtime_video_restore_output() == 0 && !runtime_output_needs_restore);
     int previous = restores; assert(runtime_video_restore_output() == 0 && restores == previous);
+    assert(!runtime_output_reopen_pending); /* Configuration/restoration is not a successful close. */
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,17 +194,33 @@ int main(void) {
 
     def test_high_refresh_metadata(self):
         builder = (ROOT / "tools/build-native-test-app.sh").read_text()
-        body = builder.split("<<'HFR_METADATA'\n", 1)[1].split("\nHFR_METADATA", 1)[0]
+        self.assertIn('tools/native-display-metadata.py', builder)
         original = json.loads((ROOT / "native-app/param.json").read_text())
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "param.json"
-            for title in ("PPSA99005", "PPSA99202"):
-                candidate = original | {"titleId": title}
-                path.write_text(json.dumps(candidate))
-                subprocess.run([sys.executable, "-", str(path), title],
-                               input=body, text=True, check=True)
-                self.assertEqual(json.loads(path.read_text()), candidate | {"attribute3": 0x80040})
             path.write_text(json.dumps(original))
-            mismatch = subprocess.run([sys.executable, "-", str(path), "PPSA99202"],
-                                      input=body, text=True, capture_output=True)
-            self.assertNotEqual(mismatch.returncode, 0)
+            subprocess.run([sys.executable, str(ROOT / "tools/native-display-metadata.py"),
+                            str(path), "--fps", "120"], check=True)
+            actual = json.loads(path.read_text())
+        self.assertEqual(actual, original | {"attribute3": 0x80040})
+
+
+    def test_custom_title_display_metadata(self):
+        builder = (ROOT / "tools/build-native-test-app.sh").read_text()
+        body = builder.split("<<'TITLE_METADATA'\n", 1)[1].split("\nTITLE_METADATA", 1)[0]
+        original = json.loads((ROOT / "native-app/param.json").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "param.json"
+            for title in ("PPSA99005", "PPSA99303"):
+                for fps in (60, 120):
+                    path.write_text(json.dumps(original))
+                    subprocess.run([sys.executable, "-", str(path), title, "Native identity test"],
+                                   input=body, text=True, check=True)
+                    subprocess.run([sys.executable, str(ROOT / "tools/native-display-metadata.py"),
+                                    str(path), "--fps", str(fps)], check=True)
+                    actual = json.loads(path.read_text())
+                    self.assertEqual(actual["titleId"], title)
+                    self.assertEqual(actual["conceptId"], title[4:])
+                    self.assertIn(title, actual["contentId"])
+                    self.assertEqual(actual["localizedParameters"]["en-US"]["titleName"], "Native identity test")
+                    self.assertEqual(actual["attribute3"], 0x80040 if fps == 120 else 0)

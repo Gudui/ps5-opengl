@@ -210,19 +210,7 @@ metadata['contentId'] = metadata['contentId'].replace('PPSA99005', sys.argv[2])
 metadata['localizedParameters']['en-US']['titleName'] = sys.argv[3]
 path.write_text(json.dumps(metadata, indent=2) + '\n')
 TITLE_METADATA
-if [[ $display_fps -gt 60 ]]; then
-    # Ordinary high-resolution/HFR title metadata, matching the native VideoOut request.
-    python3 - "$app/sce_sys/param.json" "$title_id" <<'HFR_METADATA'
-import json
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-metadata = json.loads(path.read_text())
-assert metadata["titleId"] == sys.argv[2] and metadata["attribute3"] == 0
-metadata["attribute3"] = 0x80040
-path.write_text(json.dumps(metadata, indent=2) + "\n")
-HFR_METADATA
-fi
+python3 "$root/tools/native-display-metadata.py" "$app/sce_sys/param.json" --fps "$display_fps"
 
 group="$app/vendor/libps5_opengl_group.a"
 {

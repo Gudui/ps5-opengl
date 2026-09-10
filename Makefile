@@ -7,7 +7,7 @@ PS5_NATIVE_APP_TEMPLATE ?= $(abspath ../ps5-native-app-boilerplate)
 PS5_PAYLOAD_SDK ?= $(PS5_NATIVE_APP_TEMPLATE)/.deps/native/ps5-payload-sdk
 export PS5_NATIVE_APP_TEMPLATE PS5_PAYLOAD_SDK
 
-.PHONY: help source-fetch cts-fetch sdk imgui-demo nanovg sokol sokol-cube cubes test test-imgui test-sokol-cube test-cubes test-glsl test-compiler test-multidraw test-layered-mip test-staging
+.PHONY: help source-fetch cts-fetch sdk imgui-demo nanovg sokol sokol-cube cubes test test-imgui test-sokol-cube test-cubes test-glsl test-compiler test-multidraw test-layered-mip test-depth-targets test-staging
 help:
 	@printf '%s\n' 'source-fetch: pinned graphics/example sources' \
 	  'sdk: build the compiler, Mesa and installed native OpenGL SDK' \
@@ -49,12 +49,36 @@ test-multidraw:
 	bash tools/test-multidraw-host.sh
 test-layered-mip:
 	bash tools/test-layered-mip-host.sh
+test-depth-targets:
+	python3 tests/ps5/test_framebuffer_layer_query.py
+	bash tools/test-depth-targets-host.sh
 test-staging:
+	python3 tests/ps5/test_depth_clear_fill.py
+	python3 tests/ps5/test_depth_layer_layout.py
+	python3 tests/ps5/test_depth_subresources.py
+	python3 tests/ps5/test_generate_mipmap.py
+	python3 tests/ps5/test_depth_staging_alignment.py
+	python3 tests/ps5/test_depth_blit_layers.py
+	python3 tests/ps5/test_depth_msaa_array.py
+	bash tools/test-depth-array-samples-host.sh
+	bash tools/test-msaa-depth-array-host.sh
+	bash tools/test-depth-mip-blit-host.sh
+	bash tools/test-gpu-blit-host.sh
+	bash tools/test-gpu-blit-extended-host.sh
+	bash tools/test-gpu-clear-extended-host.sh
+	bash tools/test-native-color-formats-host.sh
+	bash tools/test-gpu-mipmap-host.sh
+	bash tools/test-gpu-transfer-regression-host.sh
 	bash tools/test-staging-host.sh
 test:
 	python3 -m unittest discover -s tools -p 'test_*.py'
+	python3 tests/ps5/test_egl_drawable.py
 	python3 tools/test_sdl_sdk.py
 	python3 tests/ps5/test_gpu_clear_state.py
+	python3 tests/ps5/test_vertex_layout_state.py
+	python3 tests/ps5/test_gpu_blit.py
+	python3 tests/ps5/test_linear_color_targets.py
+	python3 tests/ps5/test_render_target_extents.py
 	python3 tests/ps5/test_draw_profile.py
 	python3 tests/ps5/test_gpu_present.py
 	python3 tests/ps5/test_submit_batch_probe.py

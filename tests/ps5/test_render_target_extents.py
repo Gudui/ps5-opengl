@@ -15,8 +15,10 @@ screen = (ROOT / "src/gallium/ps5/ps5_screen.c").read_text()
 
 
 def function(name):
-    start = backend.index("int\n" + name + "(")
-    return backend[start:backend.index("\n}", start) + 2]
+    match = re.search(r"^(?:static )?(?:int|unsigned)\n" +
+                      re.escape(name) + r"\(", backend, re.M)
+    assert match, name
+    return backend[match.start():backend.index("\n}", match.end()) + 2]
 
 
 defines = "\n".join(re.findall(
@@ -26,6 +28,8 @@ scissor = screen[screen.index("   scissor = context->rasterizer"):]
 scissor = scissor[:scissor.index("\n}")]
 allocation = screen[screen.index("   if (PS5_ENABLE_SHARED_RENDER_POOL_CANDIDATE && ps5->render_pool &&"):]
 allocation = allocation[:allocation.index("   direct_limit = sceKernelGetDirectMemorySize();")]
+target_extents = screen[screen.index("         target_widths[i] = surface->texture"):]
+target_extents = target_extents[:target_extents.index("         target_views[i]")]
 code = r'''
 #include <assert.h>
 #include <stdint.h>
@@ -41,15 +45,18 @@ static unsigned ps5_agc_mrt_count = 1, ps5_agc_mrt_samples = 1;
 static void *ps5_agc_scanout_target, *ps5_agc_mrt_targets[8], *submitted_target;
 static size_t ps5_agc_scanout_size, ps5_agc_mrt_sizes[8];
 static uint32_t ps5_agc_mrt_color_info[8], ps5_agc_mrt_attrib2[8];
+static uint32_t ps5_agc_mrt_pitches[8];
 static uint32_t ps5_agc_depth_width, ps5_agc_depth_height;
 static int ps5_agc_gate2_set_framebuffer(void *target, size_t size) {
     assert(size >= PS5_AGC_FRAMEBUFFER_BYTES);
     submitted_target = target;
     return 0;
 }
-''' + "\n".join(function("ps5_agc_gate2_" + name) for name in (
-    "set_scanout", "set_framebuffers", "set_color_target_extents",
-    "set_depth_target_extents")) + r'''
+''' + "\n".join(function(name) for name in (
+    "ps5_agc_linear_color_bytes", "ps5_agc_color_target_extent",
+    "ps5_agc_gate2_set_scanout", "ps5_agc_gate2_set_framebuffers",
+    "ps5_agc_gate2_set_color_target_extents",
+    "ps5_agc_gate2_set_depth_target_extents")) + r'''
 struct pipe_scissor_state { unsigned minx, miny, maxx, maxy; };
 struct rasterizer { bool scissor; };
 struct context {
@@ -67,9 +74,36 @@ static bool encode_scissor(struct context *context, struct native *native) {
 #define PS5_ENABLE_SHARED_RENDER_POOL_CANDIDATE 1
 #define PIPE_BIND_DISPLAY_TARGET 1
 #define PIPE_FORMAT_Z32_FLOAT_S8X24_UINT 1
+#define PIPE_BUFFER 0
 struct ps5_screen { void *render_pool; };
-struct ps5_resource { int unused; };
-struct pipe_resource { unsigned bind, format, nr_samples; };
+struct ps5_resource { struct { unsigned width0, height0; } base; };
+struct pipe_surface { struct ps5_resource *texture; unsigned level; };
+static unsigned ps5_surface_width(const struct pipe_surface *s) {
+    return s->texture->base.width0 >> s->level;
+}
+static unsigned ps5_surface_height(const struct pipe_surface *s) {
+    return s->texture->base.height0 >> s->level;
+}
+static void check_target_extents(unsigned width, unsigned height, bool attached) {
+    struct ps5_resource resource = {{width, height}}, *target = &resource;
+    struct pipe_surface storage = {attached ? target : NULL, 1}, *surface = &storage;
+    uint32_t target_widths[1], target_heights[1];
+    unsigned i = 0;
+''' + target_extents + r'''
+    assert(target_widths[0] == (attached ? width / 2 : 1));
+    assert(target_heights[0] == (attached ? height / 2 : 1));
+    if (!attached) {
+        /* An unused color slot must fit one tile even at MSAA4. The display
+         * pool is single-sampled and must not be sized as a 4K MSAA target. */
+        ps5_agc_mrt_color_info[0] = 10u << 2;
+        ps5_agc_mrt_sizes[0] = 65536;
+        for (unsigned samples = 1; samples <= 4; samples += 3) {
+            ps5_agc_mrt_samples = samples;
+            assert(ps5_agc_gate2_set_color_target_extents(target_widths, target_heights, 1) == 0);
+        }
+    }
+}
+struct pipe_resource { unsigned bind, format, nr_samples, target; };
 static bool arena_available;
 static unsigned direct_allocations;
 static bool ps5_render_arena_allocate(struct ps5_screen *screen,
@@ -79,7 +113,8 @@ static bool ps5_render_arena_allocate(struct ps5_screen *screen,
 }
 static struct ps5_resource *allocate(size_t allocation_size) {
     struct ps5_screen storage = {(void *)(uintptr_t)1}, *ps5 = &storage;
-    struct pipe_resource description = {0, 0, 1}, *templ = &description;
+    struct pipe_resource description = {.nr_samples = 1, .target = PIPE_BUFFER};
+    struct pipe_resource *templ = &description;
     struct ps5_resource *resource = calloc(1, sizeof(*resource));
     size_t allocation_alignment = 0x200000;
     bool render_staging = false;
@@ -107,6 +142,12 @@ int main(void) {
     uint32_t width = 8192, height = 8192;
     assert(ps5_agc_gate2_set_scanout(display, 0x1400000) == 0);
     assert(ps5_agc_gate2_set_framebuffers(&target, &bytes, 1) == 0);
+    check_target_extents(3840, 2160, false);
+    check_target_extents(2560, 1440, false);
+    check_target_extents(8192, 64, false);
+    check_target_extents(512, 512, true);
+    ps5_agc_mrt_sizes[0] = bytes;
+    ps5_agc_mrt_samples = 1;
     assert(submitted_target == display && ps5_agc_scanout_target == display);
     assert(ps5_agc_mrt_targets[0] == target);
     ps5_agc_mrt_color_info[0] = 10u << 2; /* RGBA8 */

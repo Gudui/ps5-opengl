@@ -46,13 +46,15 @@ for index in range(program_count):
         assert offset % alignment == address % alignment
 PY
 
-grep -aFq '[pss-opengl-cts] starting GL33 CTS runner' "$linked"
-grep -aFq '[pss-opengl-cts] finished' "$linked"
-grep -aFq '/download0/pss-opengl-cts.status' "$linked"
+grep -aFq '[ps5-opengl-cts] starting GL33 CTS runner' "$linked"
+grep -aFq '[ps5-opengl-cts] finished' "$linked"
+grep -aFq '/download0/ps5-opengl-cts.status' "$linked"
 grep -aFq 'KHR-GL33' "$linked"
 grep -Fqx -- '--deqp-terminate-on-device-lost=disable' "$dist/cts-args.txt"
 if grep -Fq -- '--deqp-case=KHR-GL33.info.*' "$dist/cts-args.txt"; then
     :
+elif grep -Fxq -- '--deqp-case=CTS-Configs.gl33' "$dist/cts-args.txt"; then
+    grep -aFq 'CTS-Configs' "$linked"
 elif grep -Fq -- '--deqp-caselist-file=/app0/cts-shard.txt' \
         "$dist/cts-args.txt" && test -s "$dist/cts-shard.txt" &&
         ! grep -Ev '^KHR-GL33\.[^[:space:]]+$' "$dist/cts-shard.txt"; then

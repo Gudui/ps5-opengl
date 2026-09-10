@@ -47,6 +47,7 @@ ps5_runtime_printf(const char *format, ...)
 #include "util/u_framebuffer.h"
 #include "util/u_helpers.h"
 #include "util/u_inlines.h"
+#include "util/u_memset.h"
 #include "util/u_prim.h"
 #include "util/u_prim_restart.h"
 #include "util/u_surface.h"
@@ -76,6 +77,9 @@ _Static_assert(PIPE_LOGICOP_CLEAR == 0 && PIPE_LOGICOP_COPY == 12 &&
 #define PS5_DIRECT_ALIGNMENT 0x4000u
 #ifndef PS5_GPU_CLEAR_MIN_PIXELS
 #define PS5_GPU_CLEAR_MIN_PIXELS 16384u
+#endif
+#ifndef PS5_GPU_BLIT_MIN_PIXELS
+#define PS5_GPU_BLIT_MIN_PIXELS (512u * 512u)
 #endif
 #define PS5_RENDER_TARGET_BYTES PS5_SCANOUT_BYTES
 #ifndef PS5_RENDER_ARENA_BYTES
@@ -627,6 +631,15 @@ ps5_float_bits(float value)
 }
 
 static size_t
+ps5_tiled_depth_layer_xor(unsigned layer)
+{
+   /* GFX10 16-pipe 64KB_Z_X: address bits 8..11 contain Z3..Z0.
+    * See Mesa addrlib's GFX10_SW_PATTERN_NIBBLE2[74]. */
+   return ((layer & 1u) << 11) | ((layer & 2u) << 9) |
+          ((layer & 4u) << 7) | ((layer & 8u) << 5);
+}
+
+static size_t
 ps5_tiled_surface_size(unsigned width, unsigned height)
 {
    return (size_t)((width + 127u) >> 7) *
@@ -796,7 +809,13 @@ ps5_msaa4_depth_support(enum pipe_format format,
    const unsigned allowed = PIPE_BIND_DEPTH_STENCIL |
       (PS5_ENABLE_DEPTH_TEXTURE_CANDIDATE ? PIPE_BIND_SAMPLER_VIEW : 0);
 
-   return PS5_ENABLE_MSAA4_CANDIDATE && target == PIPE_TEXTURE_2D &&
+   return PS5_ENABLE_MSAA4_CANDIDATE &&
+          (target == PIPE_TEXTURE_2D ||
+           (PS5_ENABLE_MSAA_ARRAY_CANDIDATE &&
+            PS5_ENABLE_TEXTURE_ARRAY_CANDIDATE &&
+            PS5_ENABLE_LAYERED_RENDER_TARGET_CANDIDATE &&
+            PS5_ENABLE_DEPTH_TEXTURE_CANDIDATE &&
+            target == PIPE_TEXTURE_2D_ARRAY)) &&
           sample_count == 4 && storage_sample_count == 4 && bindings &&
           (format == PIPE_FORMAT_Z32_FLOAT ||
            (PS5_ENABLE_PACKED_DEPTH_STENCIL &&
@@ -1065,19 +1084,23 @@ ps5_sampled_texture_target(enum pipe_texture_target target)
 static bool
 ps5_linear_sampled_layout(const struct pipe_resource *resource)
 {
-   /* Reuse the native render/sample layout for single-mip RGBA8/sRGB images. CPU
+   /* Reuse the native render/sample layout for single-mip color images. CPU
     * access already converts through transfer_map/unmap; draws need no copy.
     * ponytail: other formats, mip chains and layers keep existing staging. */
    if (PS5_ENABLE_RENDER_TO_TEXTURE_CANDIDATE &&
        PS5_ENABLE_DYNAMIC_COLOR_TARGET_CANDIDATE && resource &&
        resource->target == PIPE_TEXTURE_2D &&
        (resource->format == PIPE_FORMAT_R8G8B8A8_UNORM ||
-        (resource->format == PIPE_FORMAT_R8G8B8A8_SRGB &&
-         ps5_sampled_texture_format(resource->format) &&
-         ps5_render_target_format(resource->format))) &&
+        resource->format == PIPE_FORMAT_R8G8B8A8_SRGB ||
+        resource->format == PIPE_FORMAT_R8_UNORM ||
+        resource->format == PIPE_FORMAT_R8G8_UNORM ||
+        resource->format == PIPE_FORMAT_R16G16B16A16_FLOAT) &&
+       ps5_sampled_texture_format(resource->format) &&
+       ps5_render_target_format(resource->format) &&
        resource->nr_samples <= 1 && resource->nr_storage_samples <= 1 &&
-       !resource->last_level && resource->width0 <= PS5_MAX_COLOR_WIDTH &&
-       resource->height0 <= PS5_MAX_COLOR_HEIGHT &&
+       resource->array_size == 1 && resource->depth0 == 1 &&
+       !resource->last_level && resource->width0 && resource->height0 &&
+       resource->width0 <= PS5_MAX_COLOR_WIDTH && resource->height0 <= PS5_MAX_COLOR_HEIGHT &&
        (resource->bind & (PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW)) ==
           (PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW))
       return false;
@@ -2459,6 +2482,7 @@ ps5_prepare_texture(struct ps5_context *context,
                        texture->base.format != PIPE_FORMAT_R8G8B8A8_SRGB &&
                        texture->base.format != PIPE_FORMAT_R8_UNORM &&
                        texture->base.format != PIPE_FORMAT_R8G8_UNORM &&
+                       texture->base.format != PIPE_FORMAT_R16G16B16A16_FLOAT &&
                        texture->base.format !=
                           PIPE_FORMAT_R11G11B10_FLOAT &&
                        !(PS5_ENABLE_TEXTURE_INTEGER_CANDIDATE &&
@@ -2554,7 +2578,9 @@ ps5_prepare_texture(struct ps5_context *context,
                       ((texture->base.height0 - 1u) << 14) |
                       (UINT32_C(1) << 31); /* GFX10 RESOURCE_LEVEL. */
       descriptor[3] = (tiled_depth_target && multisampled
-                           ? UINT32_C(0xe1820000)
+                           ? (texture->base.target == PIPE_TEXTURE_2D_ARRAY
+                                 ? UINT32_C(0xf1820000)
+                                 : UINT32_C(0xe1820000))
                        : tiled_depth_target
                            ? (texture->base.target == PIPE_TEXTURE_1D
                                  ? UINT32_C(0x81800000)
@@ -2785,6 +2811,9 @@ int ps5_agc_gate2_set_color_target_extents(const uint32_t *widths,
 int ps5_agc_gate2_set_color_target_views(const uint32_t *views,
                                          unsigned count)
    __attribute__((weak));
+int ps5_agc_gate2_set_color_target_layouts(void *const *targets, const size_t *sizes,
+   const uint32_t *infos, const uint32_t *widths, const uint32_t *heights,
+   const uint32_t *pitches, unsigned count) __attribute__((weak));
 int ps5_agc_gate2_set_border_color_table(const void *table, size_t size)
    __attribute__((weak));
 
@@ -3278,8 +3307,8 @@ ps5_resource_create_unlocked(struct pipe_screen *screen,
                                    sample_layer_size * layers);
       }
       depth_staging_offset =
-         (size + PS5_COLOR_TARGET_ALIGNMENT - 1u) &
-         ~(size_t)(PS5_COLOR_TARGET_ALIGNMENT - 1u);
+         (size + PS5_RENDER_ALIGNMENT - 1u) &
+         ~(size_t)(PS5_RENDER_ALIGNMENT - 1u);
       if (depth_staging_offset < size ||
           depth_staging_size > SIZE_MAX - depth_staging_offset) {
          free(resource);
@@ -3982,7 +4011,7 @@ ps5_tiled_affine_offset(unsigned x, unsigned y,
 }
 
 static size_t
-ps5_tiled_depth_offset(unsigned x, unsigned y, unsigned width)
+ps5_tiled_depth_offset(unsigned x, unsigned y, unsigned width, unsigned layer)
 {
    static const uint16_t x_masks[7] = {
       0x0004, 0x0010, 0x0040, 0x0100, 0x2200, 0x0800, 0x8400,
@@ -3995,12 +4024,12 @@ ps5_tiled_depth_offset(unsigned x, unsigned y, unsigned width)
       y_masks, ARRAY_SIZE(y_masks));
 
    return ((((size_t)y >> 7) * ((width + 127u) >> 7) + (x >> 7)) << 16) +
-          local;
+          (local ^ ps5_tiled_depth_layer_xor(layer));
 }
 
 static size_t
 ps5_tiled_depth_msaa4_offset(unsigned x, unsigned y, unsigned sample,
-                             unsigned width)
+                             unsigned width, unsigned layer)
 {
    static const uint16_t x_masks[7] = {
       0x0010, 0x0040, 0x8000, 0x0100, 0x2200, 0x0800, 0x0400,
@@ -4021,11 +4050,11 @@ ps5_tiled_depth_msaa4_offset(unsigned x, unsigned y, unsigned sample,
          local ^= sample_masks[bit];
    }
    return ((((size_t)y >> 6) * ((width + 63u) >> 6) + (x >> 6)) << 16) +
-          local;
+          (local ^ ps5_tiled_depth_layer_xor(layer));
 }
 
 static size_t
-ps5_tiled_stencil_offset(unsigned x, unsigned y, unsigned width)
+ps5_tiled_stencil_offset(unsigned x, unsigned y, unsigned width, unsigned layer)
 {
    static const uint16_t x_masks[8] = {
       0x0001, 0x0004, 0x0010, 0x0140,
@@ -4040,12 +4069,12 @@ ps5_tiled_stencil_offset(unsigned x, unsigned y, unsigned width)
       y_masks, ARRAY_SIZE(y_masks));
 
    return ((((size_t)y >> 8) * ((width + 255u) >> 8) + (x >> 8)) << 16) +
-          local;
+          (local ^ ps5_tiled_depth_layer_xor(layer));
 }
 
 static size_t
 ps5_tiled_stencil_msaa4_offset(unsigned x, unsigned y, unsigned sample,
-                               unsigned width)
+                               unsigned width, unsigned layer)
 {
    static const uint16_t x_masks[7] = {
       0x0004, 0x0010, 0x0040, 0x0100, 0x2200, 0x0800, 0x8400,
@@ -4065,7 +4094,7 @@ ps5_tiled_stencil_msaa4_offset(unsigned x, unsigned y, unsigned sample,
          local ^= sample_masks[bit];
    }
    return ((((size_t)y >> 7) * ((width + 127u) >> 7) + (x >> 7)) << 16) +
-          local;
+          (local ^ ps5_tiled_depth_layer_xor(layer));
 }
 
 static size_t
@@ -4284,6 +4313,53 @@ ps5_surface_layer_count(const struct pipe_surface *surface)
    return ps5_texture_level_layers(surface->texture, surface->level);
 }
 
+static unsigned
+ps5_linear_color_pitch(const struct pipe_surface *surface)
+{
+   /* Render one existing linear mip/layer directly. Keep allocated staging for
+    * layered draws and unsupported formats; sampler/CPU storage is unchanged. */
+   if (!PS5_ENABLE_DYNAMIC_COLOR_TARGET_CANDIDATE ||
+       !ps5_agc_gate2_set_color_target_layouts || !surface || !surface->texture)
+      return 0;
+   const struct ps5_resource *r = (const struct ps5_resource *)surface->texture;
+   if ((r->base.target != PIPE_TEXTURE_2D && r->base.target != PIPE_TEXTURE_2D_ARRAY) ||
+       !r->base.width0 || !r->base.height0 || r->base.depth0 != 1 ||
+       r->base.last_level >= ARRAY_SIZE(r->level_stride) || r->base.last_level >= 16 ||
+       r->base.width0 > PS5_MAX_COLOR_WIDTH || r->base.height0 > PS5_MAX_COLOR_HEIGHT ||
+       (r->base.target == PIPE_TEXTURE_2D && r->base.array_size != 1) ||
+       (r->base.bind & PIPE_BIND_DISPLAY_TARGET) || !(r->base.bind & PIPE_BIND_RENDER_TARGET) ||
+       r->base.nr_samples > 1 || r->base.nr_storage_samples > 1 ||
+       surface->format != r->base.format || !r->render_staging_size || r->depth_staging_size ||
+       !ps5_linear_sampled_layout(&r->base) || !r->data || r->size > r->allocation_size ||
+       surface->level > r->base.last_level || surface->level >= ARRAY_SIZE(r->level_stride) ||
+       surface->level >= 32 || surface->first_layer != surface->last_layer ||
+       surface->last_layer >= ps5_surface_layer_count(surface) || !r->layer_stride ||
+       surface->last_layer >= r->size / r->layer_stride ||
+       (surface->format != PIPE_FORMAT_R8G8B8A8_UNORM && surface->format != PIPE_FORMAT_R8_UNORM &&
+        surface->format != PIPE_FORMAT_R8G8_UNORM && surface->format != PIPE_FORMAT_R16G16B16A16_FLOAT))
+      return 0;
+   unsigned width = ps5_surface_width(surface), height = ps5_surface_height(surface);
+   unsigned stride = r->level_stride[surface->level];
+   unsigned bpp = ps5_texture_format_size(surface->format);
+   if (!width || !height || width > PS5_MAX_COLOR_WIDTH || height > PS5_MAX_COLOR_HEIGHT ||
+       !stride || (stride & 255u) || !bpp || stride < (uint64_t)width * bpp ||
+       stride / bpp > PS5_MAX_COLOR_WIDTH || stride > SIZE_MAX / height)
+      return 0;
+   size_t span = (size_t)(height - 1u) * stride + (size_t)width * bpp;
+   size_t level = r->level_offset[surface->level];
+   if (level > r->layer_stride || span > r->layer_stride - level)
+      return 0;
+   size_t offset = (size_t)surface->first_layer * r->layer_stride + level;
+   uintptr_t address = (uintptr_t)r->data;
+   if (offset > r->size || offset > UINTPTR_MAX - address || span > r->size - offset)
+      return 0;
+   address += offset;
+   if ((address & 255u) || address >= (UINT64_C(1) << 48) ||
+       span > (UINT64_C(1) << 48) - address)
+      return 0;
+   return stride;
+}
+
 static bool
 ps5_stage_color_surface(const struct pipe_surface *surface, bool to_staging)
 {
@@ -4444,9 +4520,9 @@ ps5_stage_depth_surface(const struct pipe_surface *surface, bool to_staging)
                             (size_t)y * resource->level_stride[surface->level] +
                             (size_t)x * format_size;
             size_t tiled = tiled_base +
-                           ps5_tiled_depth_offset(x, y, width);
+                           ps5_tiled_depth_offset(x, y, width, layer);
             size_t stencil = stencil_base +
-                             ps5_tiled_stencil_offset(x, y, width);
+                             ps5_tiled_stencil_offset(x, y, width, layer);
 
             if (linear > resource->size ||
                 resource->size - linear < format_size ||
@@ -4603,7 +4679,7 @@ ps5_transfer_map(struct pipe_context *context, struct pipe_resource *base,
                   const size_t depth_offset = depth_layer +
                      ps5_tiled_depth_offset((unsigned)box->x + x,
                                             (unsigned)box->y + y,
-                                            resource->base.width0);
+                                            resource->base.width0, (unsigned)box->z + z);
                   uint8_t *pixel = (uint8_t *)transfer->staging +
                      z * staging_layer_stride + y * staging_stride +
                      x * format_size;
@@ -4620,7 +4696,8 @@ ps5_transfer_map(struct pipe_context *context, struct pipe_resource *base,
                   if (packed) {
                      const size_t stencil_offset = stencil_layer +
                         ps5_tiled_stencil_offset((unsigned)box->x + x,
-                           (unsigned)box->y + y, resource->base.width0);
+                           (unsigned)box->y + y, resource->base.width0,
+                           (unsigned)box->z + z);
 
                      if (stencil_offset >=
                            resource->stencil_allocation_size) {
@@ -4756,7 +4833,7 @@ ps5_transfer_unmap(struct pipe_context *context,
                const size_t depth_offset = depth_layer +
                   ps5_tiled_depth_offset((unsigned)transfer->box.x + x,
                      (unsigned)transfer->box.y + y,
-                     resource->base.width0);
+                     resource->base.width0, (unsigned)transfer->box.z + z);
                const uint8_t *pixel = (const uint8_t *)ps5->staging +
                   z * transfer->layer_stride + y * transfer->stride +
                   x * format_size;
@@ -4769,7 +4846,7 @@ ps5_transfer_unmap(struct pipe_context *context,
                      ps5_tiled_stencil_offset(
                         (unsigned)transfer->box.x + x,
                         (unsigned)transfer->box.y + y,
-                        resource->base.width0);
+                        resource->base.width0, (unsigned)transfer->box.z + z);
 
                   if (stencil_offset < resource->stencil_allocation_size)
                      resource->stencil_data[stencil_offset] = pixel[4];
@@ -4974,6 +5051,102 @@ ps5_resolve_color_msaa4(struct pipe_context *context,
           info->dst.box.width, info->dst.box.height);
 }
 
+/* Restrict a local resource copy to one subresource. Mip-chain depth images
+ * keep canonical linear pixels: completed draws copy tiled scratch back there.
+ * Do not reuse scratch here: two levels of the same texture share that storage.
+ * Tiled offsets still need the original layer index for the slice XOR. */
+static bool
+ps5_depth_blit_layer(struct ps5_resource *resource, unsigned level, int layer,
+                     unsigned mask)
+{
+   const unsigned samples = resource->base.nr_samples;
+   size_t depth_size, stencil_size;
+
+   if (level > resource->base.last_level ||
+       level >= ARRAY_SIZE(resource->level_offset) || level >= 32 || layer < 0 ||
+       !resource->base.width0 || !resource->base.height0 ||
+       !ps5_depth_render_target(resource->base.target) ||
+       resource->base.target == PIPE_TEXTURE_3D ||
+       (unsigned)layer >= resource->base.array_size ||
+       ((resource->base.target == PIPE_TEXTURE_1D ||
+         resource->base.target == PIPE_TEXTURE_2D) && layer) ||
+       (samples > 1 && samples != 4))
+      return false;
+   if (resource->depth_staging_size) {
+      const bool packed = resource->base.format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT;
+      const unsigned pixel_size = packed ? 8 : 4;
+      const unsigned width = MAX2(resource->base.width0 >> level, 1u);
+      const unsigned height = MAX2(resource->base.height0 >> level, 1u);
+      const size_t stride = resource->level_stride[level];
+      size_t offset, span;
+
+      if (samples > 1 || !resource->data ||
+          (resource->base.format != PIPE_FORMAT_Z32_FLOAT && !packed) ||
+          ((mask & PIPE_MASK_S) && !packed) ||
+          !resource->layer_stride || resource->layer_stride > resource->size ||
+          stride < (uint64_t)width * pixel_size ||
+          stride > SIZE_MAX / height ||
+          (size_t)(unsigned)layer > resource->size / resource->layer_stride)
+         return false;
+      offset = (size_t)(unsigned)layer * resource->layer_stride;
+      span = (height - 1u) * stride + (size_t)width * pixel_size;
+      if (resource->level_offset[level] > resource->layer_stride ||
+          span > resource->layer_stride - resource->level_offset[level] ||
+          resource->level_offset[level] > resource->size - offset)
+         return false;
+      offset += resource->level_offset[level];
+      if (span > resource->size - offset || offset > resource->allocation_size ||
+          span > resource->allocation_size - offset)
+         return false;
+      resource->data += offset;
+      resource->allocation_size = span;
+      resource->stencil_data = packed ? resource->data + sizeof(float) : NULL;
+      resource->stencil_allocation_size = packed ? span - sizeof(float) : 0;
+      resource->base.width0 = width;
+      resource->base.height0 = height;
+      resource->level_stride[0] = stride;
+      return true;
+   }
+   if (level || resource->base.last_level)
+      return false;
+   depth_size = ps5_tiled_depth_surface_size(
+      resource->base.width0, resource->base.height0, samples);
+   stencil_size = ps5_tiled_stencil_surface_size_samples(
+      resource->base.width0, resource->base.height0, samples);
+   if (!depth_size || !stencil_size ||
+       ((mask & PIPE_MASK_Z) &&
+        (!resource->data ||
+         (size_t)(unsigned)layer >= resource->allocation_size / depth_size)) ||
+       ((mask & PIPE_MASK_S) &&
+        (!resource->stencil_data ||
+         (size_t)(unsigned)layer >=
+            resource->stencil_allocation_size / stencil_size)))
+      return false;
+   if (mask & PIPE_MASK_Z) {
+      resource->data += (size_t)(unsigned)layer * depth_size;
+      resource->allocation_size = depth_size;
+   }
+   if (mask & PIPE_MASK_S) {
+      resource->stencil_data += (size_t)(unsigned)layer * stencil_size;
+      resource->stencil_allocation_size = stencil_size;
+   }
+   return true;
+}
+
+static size_t
+ps5_depth_blit_offset(const struct ps5_resource *resource, unsigned x, unsigned y,
+                       unsigned sample, unsigned layer, bool stencil)
+{
+   if (resource->depth_staging_size)
+      return (size_t)y * resource->level_stride[0] + (size_t)x *
+         (resource->base.format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT ? 8u : 4u);
+   if (resource->base.nr_samples == 4)
+      return stencil ? ps5_tiled_stencil_msaa4_offset(x, y, sample, resource->base.width0, layer)
+                     : ps5_tiled_depth_msaa4_offset(x, y, sample, resource->base.width0, layer);
+   return stencil ? ps5_tiled_stencil_offset(x, y, resource->base.width0, layer)
+                  : ps5_tiled_depth_offset(x, y, resource->base.width0, layer);
+}
+
 static void
 ps5_resolve_depth_stencil_msaa4(struct pipe_context *context,
                                 const struct pipe_blit_info *info)
@@ -4994,9 +5167,17 @@ ps5_resolve_depth_stencil_msaa4(struct pipe_context *context,
    int64_t src_x;
    int64_t src_y;
 
+   struct ps5_resource source_layer, destination_layer;
+   if (source && destination) {
+      source_layer = *source;
+      destination_layer = *destination;
+      source = &source_layer;
+      destination = &destination_layer;
+   }
    if (!source || !destination || !(info->mask & PIPE_MASK_ZS) ||
-       (info->mask & ~PIPE_MASK_ZS) || info->src.level || info->dst.level ||
-       info->src.box.z || info->dst.box.z ||
+       (info->mask & ~PIPE_MASK_ZS) ||
+       !ps5_depth_blit_layer(source, info->src.level, info->src.box.z, info->mask) ||
+       !ps5_depth_blit_layer(destination, info->dst.level, info->dst.box.z, info->mask) ||
        info->src.box.depth != 1 || info->dst.box.depth != 1 ||
        !info->src.box.width || !info->src.box.height ||
        info->src.box.width == INT_MIN || info->src.box.height == INT_MIN ||
@@ -5011,8 +5192,6 @@ ps5_resolve_depth_stencil_msaa4(struct pipe_context *context,
        info->dst.format != destination->base.format ||
        (source->base.format != PIPE_FORMAT_Z32_FLOAT && !packed) ||
        ((info->mask & PIPE_MASK_S) && !packed) ||
-       source->base.target != PIPE_TEXTURE_2D ||
-       destination->base.target != PIPE_TEXTURE_2D ||
        source->base.nr_samples != 4 ||
        source->base.nr_storage_samples != 4 ||
        destination->base.nr_samples > 1 || info->dst_sample ||
@@ -5043,23 +5222,10 @@ ps5_resolve_depth_stencil_msaa4(struct pipe_context *context,
    if (info->render_condition_enable && !ps5_render_condition_passes(ps5))
       return;
 
-   source_depth_size = ps5_tiled_depth_surface_size(
-      source->base.width0, source->base.height0, 4);
-   destination_depth_size = ps5_tiled_depth_surface_size(
-      destination->base.width0, destination->base.height0, 1);
-   source_stencil_size = ps5_tiled_stencil_surface_size_samples(
-      source->base.width0, source->base.height0, 4);
-   destination_stencil_size = ps5_tiled_stencil_surface_size_samples(
-      destination->base.width0, destination->base.height0, 1);
-   if (source->allocation_size < source_depth_size ||
-       destination->allocation_size < destination_depth_size ||
-       ((info->mask & PIPE_MASK_S) &&
-        (!source->stencil_data || !destination->stencil_data ||
-         source->stencil_allocation_size < source_stencil_size ||
-         destination->stencil_allocation_size < destination_stencil_size))) {
-      printf("[ps5-gallium] msaa4-resolve depth-stencil rejected\n");
-      return;
-   }
+   source_depth_size = source->allocation_size;
+   destination_depth_size = destination->allocation_size;
+   source_stencil_size = source->stencil_allocation_size;
+   destination_stencil_size = destination->stencil_allocation_size;
 
    ps5_blit_scissor_bounds(info, &min_x, &min_y, &max_x, &max_y);
    if (info->mask & PIPE_MASK_Z)
@@ -5079,10 +5245,10 @@ ps5_resolve_depth_stencil_msaa4(struct pipe_context *context,
              dst_y < min_y || dst_y >= max_y)
             continue;
          if (info->mask & PIPE_MASK_Z) {
-            size_t src_offset = ps5_tiled_depth_msaa4_offset(
-               source_x, source_y, 0, source->base.width0);
-            size_t dst_offset = ps5_tiled_depth_offset(
-               dst_x, dst_y, destination->base.width0);
+            size_t src_offset = ps5_depth_blit_offset(
+               source, source_x, source_y, 0, info->src.box.z, false);
+            size_t dst_offset = ps5_depth_blit_offset(
+               destination, dst_x, dst_y, 0, info->dst.box.z, false);
 
             if (src_offset > source_depth_size ||
                 source_depth_size - src_offset < sizeof(float) ||
@@ -5093,10 +5259,10 @@ ps5_resolve_depth_stencil_msaa4(struct pipe_context *context,
                    source->data + src_offset, sizeof(float));
          }
          if (info->mask & PIPE_MASK_S) {
-            size_t src_offset = ps5_tiled_stencil_msaa4_offset(
-               source_x, source_y, 0, source->base.width0);
-            size_t dst_offset = ps5_tiled_stencil_offset(
-               dst_x, dst_y, destination->base.width0);
+            size_t src_offset = ps5_depth_blit_offset(
+               source, source_x, source_y, 0, info->src.box.z, true);
+            size_t dst_offset = ps5_depth_blit_offset(
+               destination, dst_x, dst_y, 0, info->dst.box.z, true);
 
             if (src_offset >= source_stencil_size ||
                 dst_offset >= destination_stencil_size)
@@ -5131,9 +5297,17 @@ ps5_replicate_depth_stencil_msaa4(struct pipe_context *context,
    size_t source_stencil_size;
    size_t destination_stencil_size;
 
+   struct ps5_resource source_layer, destination_layer;
+   if (source && destination) {
+      source_layer = *source;
+      destination_layer = *destination;
+      source = &source_layer;
+      destination = &destination_layer;
+   }
    if (!source || !destination || !(info->mask & PIPE_MASK_ZS) ||
-       (info->mask & ~PIPE_MASK_ZS) || info->src.level || info->dst.level ||
-       info->src.box.z || info->dst.box.z ||
+       (info->mask & ~PIPE_MASK_ZS) ||
+       !ps5_depth_blit_layer(source, info->src.level, info->src.box.z, info->mask) ||
+       !ps5_depth_blit_layer(destination, info->dst.level, info->dst.box.z, info->mask) ||
        info->src.box.depth != 1 || info->dst.box.depth != 1 ||
        info->src.box.width <= 0 || info->src.box.height <= 0 ||
        info->src.box.width != info->dst.box.width ||
@@ -5145,8 +5319,6 @@ ps5_replicate_depth_stencil_msaa4(struct pipe_context *context,
        info->dst.format != destination->base.format ||
        (source->base.format != PIPE_FORMAT_Z32_FLOAT && !packed) ||
        ((info->mask & PIPE_MASK_S) && !packed) ||
-       source->base.target != PIPE_TEXTURE_2D ||
-       destination->base.target != PIPE_TEXTURE_2D ||
        source->base.nr_samples > 1 ||
        destination->base.nr_samples != 4 ||
        destination->base.nr_storage_samples != 4 || info->dst_sample ||
@@ -5167,23 +5339,10 @@ ps5_replicate_depth_stencil_msaa4(struct pipe_context *context,
    if (info->render_condition_enable && !ps5_render_condition_passes(ps5))
       return;
 
-   source_depth_size = ps5_tiled_depth_surface_size(
-      source->base.width0, source->base.height0, 1);
-   destination_depth_size = ps5_tiled_depth_surface_size(
-      destination->base.width0, destination->base.height0, 4);
-   source_stencil_size = ps5_tiled_stencil_surface_size_samples(
-      source->base.width0, source->base.height0, 1);
-   destination_stencil_size = ps5_tiled_stencil_surface_size_samples(
-      destination->base.width0, destination->base.height0, 4);
-   if (source->allocation_size < source_depth_size ||
-       destination->allocation_size < destination_depth_size ||
-       ((info->mask & PIPE_MASK_S) &&
-        (!source->stencil_data || !destination->stencil_data ||
-         source->stencil_allocation_size < source_stencil_size ||
-         destination->stencil_allocation_size < destination_stencil_size))) {
-      printf("[ps5-gallium] msaa4-replicate depth-stencil rejected\n");
-      return;
-   }
+   source_depth_size = source->allocation_size;
+   destination_depth_size = destination->allocation_size;
+   source_stencil_size = source->stencil_allocation_size;
+   destination_stencil_size = destination->stencil_allocation_size;
 
    ps5_blit_scissor_bounds(info, &min_x, &min_y, &max_x, &max_y);
    if (info->mask & PIPE_MASK_Z)
@@ -5203,22 +5362,22 @@ ps5_replicate_depth_stencil_msaa4(struct pipe_context *context,
              dst_y < min_y || dst_y >= max_y)
             continue;
          if (info->mask & PIPE_MASK_Z) {
-            src_depth_offset = ps5_tiled_depth_offset(
-               src_x, src_y, source->base.width0);
+            src_depth_offset = ps5_depth_blit_offset(
+               source, src_x, src_y, 0, info->src.box.z, false);
             if (src_depth_offset > source_depth_size ||
                 source_depth_size - src_depth_offset < sizeof(float))
                return;
          }
          if (info->mask & PIPE_MASK_S) {
-            src_stencil_offset = ps5_tiled_stencil_offset(
-               src_x, src_y, source->base.width0);
+            src_stencil_offset = ps5_depth_blit_offset(
+               source, src_x, src_y, 0, info->src.box.z, true);
             if (src_stencil_offset >= source_stencil_size)
                return;
          }
          for (unsigned sample = 0; sample < 4; ++sample) {
             if (info->mask & PIPE_MASK_Z) {
-               size_t dst_offset = ps5_tiled_depth_msaa4_offset(
-                  dst_x, dst_y, sample, destination->base.width0);
+               size_t dst_offset = ps5_depth_blit_offset(
+                  destination, dst_x, dst_y, sample, info->dst.box.z, false);
 
                if (dst_offset > destination_depth_size ||
                    destination_depth_size - dst_offset < sizeof(float))
@@ -5227,8 +5386,8 @@ ps5_replicate_depth_stencil_msaa4(struct pipe_context *context,
                       source->data + src_depth_offset, sizeof(float));
             }
             if (info->mask & PIPE_MASK_S) {
-               size_t dst_offset = ps5_tiled_stencil_msaa4_offset(
-                  dst_x, dst_y, sample, destination->base.width0);
+               size_t dst_offset = ps5_depth_blit_offset(
+                  destination, dst_x, dst_y, sample, info->dst.box.z, true);
 
                if (dst_offset >= destination_stencil_size)
                   return;
@@ -5245,6 +5404,169 @@ ps5_replicate_depth_stencil_msaa4(struct pipe_context *context,
                          destination_stencil_size);
    printf("[ps5-gallium] msaa4-replicate depth-stencil=%dx%d mask=%x\n",
           info->dst.box.width, info->dst.box.height, info->mask);
+}
+
+static bool
+ps5_blit_gpu_color(struct ps5_context *context, const struct pipe_blit_info *info)
+{
+   /* ponytail: large plain-color copies using existing sampler layouts and
+    * directly renderable views. Keep the measured floor and other fallbacks. */
+   if (!PS5_ENABLE_RENDER_TO_TEXTURE_CANDIDATE || !PS5_ENABLE_MRT_CANDIDATE ||
+       !PS5_ENABLE_UBO_CANDIDATE || !context || !info ||
+       !info->src.resource || !info->dst.resource ||
+       info->mask != PIPE_MASK_RGBA ||
+       (info->filter != PIPE_TEX_FILTER_NEAREST && info->filter != PIPE_TEX_FILTER_LINEAR) ||
+       info->num_window_rectangles || info->alpha_blend || info->swizzle_enable ||
+       info->sample0_only || info->dst_sample || context->render_condition_query ||
+       context->stream_output_target_count || context->active_occlusion_query ||
+       context->active_primitives_generated_query || context->active_primitives_emitted_query ||
+       !info->src.box.width || !info->src.box.height ||
+       info->src.box.width == INT_MIN || info->src.box.height == INT_MIN ||
+       info->dst.box.width <= 0 || info->dst.box.height <= 0)
+      return false;
+
+   int64_t left = info->dst.box.x, bottom = info->dst.box.y;
+   int64_t right = left + info->dst.box.width, top = bottom + info->dst.box.height;
+   if (info->scissor_enable) {
+      left = MAX2(left, info->scissor.minx);
+      bottom = MAX2(bottom, info->scissor.miny);
+      right = MIN2(right, info->scissor.maxx);
+      top = MIN2(top, info->scissor.maxy);
+   }
+   if (right <= left || top <= bottom ||
+       (uint64_t)(right - left) * (top - bottom) < PS5_GPU_BLIT_MIN_PIXELS)
+      return false;
+
+   const bool resolve = info->src.resource->nr_samples == 4 &&
+                        info->src.resource->nr_storage_samples == 4;
+   if (resolve && (!PS5_ENABLE_MSAA4_CANDIDATE ||
+                   info->filter != PIPE_TEX_FILTER_NEAREST ||
+                   abs(info->src.box.width) != info->dst.box.width ||
+                   abs(info->src.box.height) != info->dst.box.height))
+      return false;
+
+   const struct ps5_resource *resources[] = {
+      (const struct ps5_resource *)info->src.resource,
+      (const struct ps5_resource *)info->dst.resource,
+   };
+   const struct pipe_box *boxes[] = {&info->src.box, &info->dst.box};
+   const unsigned levels[] = {info->src.level, info->dst.level};
+   uintptr_t addresses[2];
+   size_t spans[2];
+   if (info->src.format != info->dst.format ||
+       (info->src.format != PIPE_FORMAT_R8G8B8A8_UNORM &&
+        info->src.format != PIPE_FORMAT_R8_UNORM &&
+        info->src.format != PIPE_FORMAT_R8G8_UNORM &&
+        info->src.format != PIPE_FORMAT_R16G16B16A16_FLOAT) ||
+       (resolve && info->src.format != PIPE_FORMAT_R8G8B8A8_UNORM))
+      return false;
+   for (unsigned i = 0; i < 2; ++i) {
+      const struct ps5_resource *r = resources[i];
+      const struct pipe_box *b = boxes[i];
+      if ((r->base.target != PIPE_TEXTURE_2D && r->base.target != PIPE_TEXTURE_2D_ARRAY) ||
+          r->base.depth0 != 1 || !r->base.array_size ||
+          (r->base.target == PIPE_TEXTURE_2D && r->base.array_size != 1) ||
+          levels[i] > r->base.last_level || r->base.last_level >= ARRAY_SIZE(r->level_stride) ||
+          r->base.last_level >= 16 ||
+          ((!resolve || i) &&
+           (r->base.nr_samples > 1 || r->base.nr_storage_samples > 1)) ||
+          r->base.format != info->src.format ||
+          !(r->base.bind & PIPE_BIND_RENDER_TARGET) ||
+          (r->base.bind & PIPE_BIND_DISPLAY_TARGET) ||
+          r->depth_staging_size ||
+          !r->data || !r->allocation_size ||
+          r->allocation_size > UINTPTR_MAX - (uintptr_t)r->data ||
+          !r->base.width0 || !r->base.height0 ||
+          r->base.width0 > PS5_MAX_COLOR_WIDTH || r->base.height0 > PS5_MAX_COLOR_HEIGHT ||
+          b->x < 0 || b->y < 0 || b->z < 0 ||
+          (unsigned)b->z >= r->base.array_size || b->depth != 1)
+         return false;
+      unsigned width = MAX2(r->base.width0 >> levels[i], 1u);
+      unsigned height = MAX2(r->base.height0 >> levels[i], 1u);
+      if ((unsigned)b->x > width || (unsigned)b->y > height ||
+          (int64_t)b->x + b->width < 0 || (int64_t)b->y + b->height < 0 ||
+          (int64_t)b->x + b->width > width || (int64_t)b->y + b->height > height)
+         return false;
+      struct pipe_surface selected = {
+         .texture = (struct pipe_resource *)&r->base, .format = r->base.format,
+         .level = levels[i], .first_layer = b->z, .last_layer = b->z,
+      };
+      unsigned pitch = ps5_linear_color_pitch(&selected);
+      size_t offset = 0;
+      if (pitch) {
+         offset = (size_t)b->z * r->layer_stride + r->level_offset[levels[i]];
+         spans[i] = (size_t)(height - 1u) * pitch +
+                    (size_t)width * ps5_texture_format_size(r->base.format);
+      } else {
+         if (r->base.target != PIPE_TEXTURE_2D || r->base.last_level || b->z ||
+             ps5_linear_sampled_layout(&r->base) || r->render_staging_size)
+            return false;
+         spans[i] = resolve && !i ? ps5_tiled_color_msaa4_surface_size(
+             r->base.format, r->base.width0, r->base.height0) :
+             ps5_tiled_color_surface_size(r->base.format, r->base.width0,
+                                           r->base.height0);
+      }
+      if (!spans[i] || offset > r->allocation_size || spans[i] > r->allocation_size - offset)
+         return false;
+      addresses[i] = (uintptr_t)r->data + offset;
+   }
+   /* Different mips/layers can share an allocation, never the same bytes. */
+   if (addresses[0] < addresses[1] + spans[1] &&
+       addresses[1] < addresses[0] + spans[0])
+      return false;
+
+   if (!context->blitter)
+      context->blitter = util_blitter_create(&context->base);
+   struct blitter_context *blitter = context->blitter;
+   if (!blitter || blitter->running || !util_blitter_is_blit_supported(blitter, info))
+      return false;
+   struct pipe_surface surface;
+   struct pipe_sampler_view templ;
+   util_blitter_default_dst_texture(&surface, info->dst.resource, info->dst.level, info->dst.box.z);
+   util_blitter_default_src_texture(blitter, &templ, info->src.resource, info->src.level);
+   struct pipe_sampler_view *view = context->base.create_sampler_view(
+      &context->base, info->src.resource, &templ);
+   if (!view)
+      return false;
+
+   bool viewport_valid = context->viewport_valid, scissor_valid = context->scissor_valid;
+   bool framebuffer_valid = context->framebuffer_valid, queries_enabled = context->queries_enabled;
+   unsigned draws_before = context->draw_calls;
+   util_blitter_save_vertex_buffers(blitter, context->vertex_buffers, context->vertex_buffer_count);
+   util_blitter_save_vertex_elements(blitter, context->vertex_elements);
+   util_blitter_save_vertex_shader(blitter, context->vs);
+   util_blitter_save_geometry_shader(blitter, context->gs);
+   util_blitter_save_so_targets(blitter, 0, NULL, context->stream_output_primitive);
+   util_blitter_save_rasterizer(blitter, context->rasterizer);
+   util_blitter_save_fragment_shader(blitter, context->fs);
+   util_blitter_save_depth_stencil_alpha(blitter, context->depth_stencil_alpha);
+   util_blitter_save_blend(blitter, context->blend);
+   util_blitter_save_stencil_ref(blitter, &context->stencil_ref);
+   util_blitter_save_viewport(blitter, &context->viewport);
+   util_blitter_save_scissor(blitter, &context->scissor);
+   util_blitter_save_sample_mask(blitter, context->sample_mask, 1);
+   util_blitter_save_framebuffer(blitter, &context->framebuffer);
+   util_blitter_save_fragment_sampler_states(blitter, PS5_MAX_TEXTURE_UNITS, context->samplers[1]);
+   util_blitter_save_fragment_sampler_views(blitter, PS5_MAX_TEXTURE_UNITS, context->sampler_views[1]);
+   /* The caller drained prior work; blitter copies use the synchronous draw
+    * path, not the special deferred-clear exception. No CPU replay on failure. */
+   util_blitter_blit_generic(blitter, &surface, &info->dst.box, view, &info->src.box,
+                             info->src.resource->width0, info->src.resource->height0,
+                             info->mask, info->filter,
+                             info->scissor_enable ? &info->scissor : NULL,
+                             false, false, 0, NULL);
+   pipe_sampler_view_reference(&view, NULL);
+   context->viewport_valid = viewport_valid;
+   context->scissor_valid = scissor_valid;
+   context->framebuffer_valid = framebuffer_valid;
+   context->queries_enabled = queries_enabled;
+   if (context->draw_calls == draws_before)
+      context->last_draw_status = -30;
+   if (context->last_draw_status != 0 || draws_before < 3)
+      printf("[ps5-gallium] blit-gpu-color status=%d draws=%u size=%dx%d\n",
+             context->last_draw_status, context->draw_calls - draws_before,
+             info->dst.box.width, info->dst.box.height);
+   return true;
 }
 
 static void
@@ -5267,6 +5589,8 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
    unsigned min_x, min_y, max_x, max_y;
 
    ps5_draw_batch_drain();
+   if (ps5_blit_gpu_color(ps5, info))
+      return;
    if (PS5_ENABLE_MSAA4_CANDIDATE && info && info->src.resource &&
        info->src.resource->nr_samples == 4) {
       if (info->mask & PIPE_MASK_ZS)
@@ -5287,21 +5611,9 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
          (struct ps5_resource *)info->src.resource;
       struct ps5_resource *destination =
          (struct ps5_resource *)info->dst.resource;
-      const unsigned source_width = source ? source->base.width0 : 0;
-      const unsigned source_height = source ? source->base.height0 : 0;
-      const unsigned destination_width =
-         destination ? destination->base.width0 : 0;
-      const unsigned destination_height =
-         destination ? destination->base.height0 : 0;
-      const size_t source_depth_size =
-         ps5_tiled_surface_size(source_width, source_height);
-      const size_t destination_depth_size =
-         ps5_tiled_surface_size(destination_width, destination_height);
-      const size_t source_stencil_size =
-         ps5_tiled_stencil_surface_size(source_width, source_height);
-      const size_t destination_stencil_size =
-         ps5_tiled_stencil_surface_size(destination_width,
-                                        destination_height);
+      unsigned source_width, source_height, destination_width, destination_height;
+      size_t source_depth_size, destination_depth_size;
+      size_t source_stencil_size, destination_stencil_size;
       const bool packed = source &&
          source->base.format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT;
       unsigned source_box_width = 0;
@@ -5309,11 +5621,18 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
       int64_t source_x = 0;
       int64_t source_y = 0;
 
+      struct ps5_resource source_layer, destination_layer;
+      if (source && destination) {
+         source_layer = *source;
+         destination_layer = *destination;
+         source = &source_layer;
+         destination = &destination_layer;
+      }
       if (!source || !destination ||
           !(info->mask & PIPE_MASK_ZS) ||
           (info->mask & ~PIPE_MASK_ZS) ||
-          info->src.level || info->dst.level ||
-          info->src.box.z || info->dst.box.z ||
+          !ps5_depth_blit_layer(source, info->src.level, info->src.box.z, info->mask) ||
+          !ps5_depth_blit_layer(destination, info->dst.level, info->dst.box.z, info->mask) ||
           info->src.box.depth != 1 || info->dst.box.depth != 1 ||
           !info->src.box.width || !info->src.box.height ||
           info->src.box.width == INT_MIN ||
@@ -5324,23 +5643,22 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
           info->dst.format != destination->base.format ||
           (source->base.format != PIPE_FORMAT_Z32_FLOAT && !packed) ||
           ((info->mask & PIPE_MASK_S) && !packed) ||
-          source->base.target != PIPE_TEXTURE_2D ||
-          destination->base.target != PIPE_TEXTURE_2D ||
           source->base.nr_samples > 1 ||
           destination->base.nr_samples > 1 || info->dst_sample ||
           info->sample0_only ||
           info->swizzle_enable || info->num_window_rectangles ||
-          info->alpha_blend || info->filter != PIPE_TEX_FILTER_NEAREST ||
-          source->allocation_size < source_depth_size ||
-          destination->allocation_size < destination_depth_size ||
-          ((info->mask & PIPE_MASK_S) &&
-           (!source->stencil_data || !destination->stencil_data ||
-            source->stencil_allocation_size < source_stencil_size ||
-            destination->stencil_allocation_size <
-               destination_stencil_size))) {
+          info->alpha_blend || info->filter != PIPE_TEX_FILTER_NEAREST) {
          printf("[ps5-gallium] software-blit depth-stencil rejected\n");
          return;
       }
+      source_width = source->base.width0;
+      source_height = source->base.height0;
+      destination_width = destination->base.width0;
+      destination_height = destination->base.height0;
+      source_depth_size = source->allocation_size;
+      destination_depth_size = destination->allocation_size;
+      source_stencil_size = source->stencil_allocation_size;
+      destination_stencil_size = destination->stencil_allocation_size;
       source_box_width = info->src.box.width < 0
                             ? (unsigned)-info->src.box.width
                             : (unsigned)info->src.box.width;
@@ -5397,10 +5715,10 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
                sx = source_box_width - 1u - sx;
             src_px = (unsigned)source_x + sx;
             if (info->mask & PIPE_MASK_Z) {
-               size_t src_offset = ps5_tiled_depth_offset(
-                  src_px, src_py, source_width);
-               size_t dst_offset = ps5_tiled_depth_offset(
-                  dst_px, dst_py, destination_width);
+               size_t src_offset = ps5_depth_blit_offset(
+                  source, src_px, src_py, 0, info->src.box.z, false);
+               size_t dst_offset = ps5_depth_blit_offset(
+                  destination, dst_px, dst_py, 0, info->dst.box.z, false);
 
                if (src_offset > source_depth_size ||
                    source_depth_size - src_offset < sizeof(float) ||
@@ -5413,10 +5731,10 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
                        source->data + src_offset, sizeof(float));
             }
             if (info->mask & PIPE_MASK_S) {
-               size_t src_offset = ps5_tiled_stencil_offset(
-                  src_px, src_py, source_width);
-               size_t dst_offset = ps5_tiled_stencil_offset(
-                  dst_px, dst_py, destination_width);
+               size_t src_offset = ps5_depth_blit_offset(
+                  source, src_px, src_py, 0, info->src.box.z, true);
+               size_t dst_offset = ps5_depth_blit_offset(
+                  destination, dst_px, dst_py, 0, info->dst.box.z, true);
 
                if (src_offset >= source_stencil_size ||
                    dst_offset >= destination_stencil_size) {
@@ -5496,6 +5814,27 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
    src_box.y = (int)src_y;
    src_box.width = (int)src_width;
    src_box.height = (int)src_height;
+
+   unsigned linear_x = 0, linear_y = 0;
+   if (info->filter == PIPE_TEX_FILTER_LINEAR) {
+      /* Filtering clamps at the source IMAGE boundary, not the blit rectangle.
+       * Map a one-texel halo so inset/upscaled edges can read their neighbors. */
+      if (info->src.level > info->src.resource->last_level || info->src.level >= 32)
+         return;
+      int64_t width = MAX2(info->src.resource->width0 >> info->src.level, 1u);
+      int64_t height = MAX2(info->src.resource->height0 >> info->src.level, 1u);
+      if (src_x < 0 || src_y < 0 || src_x + src_width > width || src_y + src_height > height)
+         return;
+      int64_t left = MAX2(src_x - 1, 0), bottom = MAX2(src_y - 1, 0);
+      int64_t right = MIN2(src_x + src_width + 1, width);
+      int64_t top = MIN2(src_y + src_height + 1, height);
+      if (right - left > INT_MAX || top - bottom > INT_MAX)
+         return;
+      linear_x = (unsigned)(src_x - left);
+      linear_y = (unsigned)(src_y - bottom);
+      src_box.x = (int)left; src_box.y = (int)bottom;
+      src_box.width = (int)(right - left); src_box.height = (int)(top - bottom);
+   }
 
    src_pixel_size = ps5_texture_format_size(info->src.format);
    dst_pixel_size = ps5_texture_format_size(info->dst.format);
@@ -5595,16 +5934,18 @@ ps5_blit(struct pipe_context *context, const struct pipe_blit_info *info)
                fx = (int64_t)(src_width - 1u) * INT64_C(0x10000) - fx;
             if (info->src.box.height < 0)
                fy = (int64_t)(src_height - 1u) * INT64_C(0x10000) - fy;
+            fx += (int64_t)linear_x * INT64_C(0x10000);
+            fy += (int64_t)linear_y * INT64_C(0x10000);
             x0 = fx >= 0 ? fx / INT64_C(0x10000)
                          : -((-fx + INT64_C(0xffff)) / INT64_C(0x10000));
             y0 = fy >= 0 ? fy / INT64_C(0x10000)
                          : -((-fy + INT64_C(0xffff)) / INT64_C(0x10000));
             wx1 = (uint64_t)(fx - x0 * INT64_C(0x10000));
             wy1 = (uint64_t)(fy - y0 * INT64_C(0x10000));
-            ix0 = (unsigned)CLAMP(x0, 0, (int64_t)src_width - 1);
-            ix1 = (unsigned)CLAMP(x0 + 1, 0, (int64_t)src_width - 1);
-            iy0 = (unsigned)CLAMP(y0, 0, (int64_t)src_height - 1);
-            iy1 = (unsigned)CLAMP(y0 + 1, 0, (int64_t)src_height - 1);
+            ix0 = (unsigned)CLAMP(x0, 0, (int64_t)src_box.width - 1);
+            ix1 = (unsigned)CLAMP(x0 + 1, 0, (int64_t)src_box.width - 1);
+            iy0 = (unsigned)CLAMP(y0, 0, (int64_t)src_box.height - 1);
+            iy1 = (unsigned)CLAMP(y0 + 1, 0, (int64_t)src_box.height - 1);
             union pipe_color_union p00, p10, p01, p11;
             float tx = (float)wx1 / 65536.0f;
             float ty = (float)wy1 / 65536.0f;
@@ -5708,18 +6049,25 @@ ps5_generate_mipmap(struct pipe_context *context,
 {
    struct ps5_resource *resource = (struct ps5_resource *)base;
    unsigned format_size;
+   bool depth;
+   unsigned components;
 
-   (void)context;
    ps5_draw_batch_drain();
    if (!PS5_ENABLE_TEXTURE_MIPMAP_CANDIDATE || !resource ||
        format != resource->base.format ||
        base_level >= last_level || last_level > resource->base.last_level ||
+       last_level >= ARRAY_SIZE(resource->level_stride) || last_level >= 32 ||
        !ps5_linear_sampled_layout(&resource->base) ||
        !ps5_sampled_texture_target(resource->base.target) ||
        !(format_size = ps5_texture_format_size(format)) ||
        util_format_is_compressed(format) ||
        util_format_is_pure_integer(format))
       return false;
+
+   /* Depth formats have no RGBA conversion callbacks. Preserve the stencil
+    * plane when filtering packed depth/stencil mip levels. */
+   depth = util_format_has_depth(util_format_description(format));
+   components = depth ? 1 : 4;
 
    if (resource->base.target == PIPE_TEXTURE_3D) {
       unsigned base_depth = MAX2(resource->base.depth0 >> base_level, 1u);
@@ -5750,6 +6098,31 @@ ps5_generate_mipmap(struct pipe_context *context,
       }
 
       for (unsigned layer = dst_first; layer <= dst_last; ++layer) {
+         /* A linear 2x2 filter is the existing box average for exact halvings.
+          * Reuse checked blits for large levels; CPU handles NPOT and the tail.
+          * No recursive draw while inside a staging/queue lock. */
+         if (!depth && (base->target == PIPE_TEXTURE_2D || base->target == PIPE_TEXTURE_2D_ARRAY) &&
+             (src_width == 2u * dst_width || src_width == 1) &&
+             (src_height == 2u * dst_height || src_height == 1) &&
+             (uint64_t)dst_width * dst_height >= PS5_GPU_BLIT_MIN_PIXELS) {
+            struct pipe_blit_info blit = {0};
+            blit.src.resource = blit.dst.resource = base;
+            blit.src.format = blit.dst.format = format;
+            blit.src.level = level - 1;
+            blit.dst.level = level;
+            blit.src.box = (struct pipe_box){.x = 0, .y = 0, .z = layer,
+               .width = src_width, .height = src_height, .depth = 1};
+            blit.dst.box = (struct pipe_box){.x = 0, .y = 0, .z = layer,
+               .width = dst_width, .height = dst_height, .depth = 1};
+            blit.mask = PIPE_MASK_RGBA;
+            blit.filter = PIPE_TEX_FILTER_LINEAR;
+            if (ps5_blit_gpu_color((struct ps5_context *)context, &blit)) {
+               if (((struct ps5_context *)context)->last_draw_status)
+                  return true; /* Attempted GPU failure must not replay another path. */
+               ps5_flush_gpu_data(resource->data, resource->size);
+               continue;
+            }
+         }
          unsigned src_z0 = resource->base.target == PIPE_TEXTURE_3D
                               ? (unsigned)((uint64_t)layer * src_depth /
                                            dst_depth)
@@ -5790,24 +6163,29 @@ ps5_generate_mipmap(struct pipe_context *context,
                            (size_t)sx * format_size;
                         float sample[4];
 
-                        util_format_unpack_rgba(format, sample, source, 1);
-                        for (unsigned component = 0; component < 4;
+                        if (depth)
+                           util_format_unpack_z_float(format, sample, source, 1);
+                        else
+                           util_format_unpack_rgba(format, sample, source, 1);
+                        for (unsigned component = 0; component < components;
                              ++component)
                            sum[component] += sample[component];
                         samples++;
                      }
                   }
                }
-               for (unsigned component = 0; component < 4; ++component)
+               for (unsigned component = 0; component < components; ++component)
                   sum[component] /= samples;
-               util_format_pack_rgba(
-                  format,
+               uint8_t *destination =
                   resource->data +
                      (size_t)layer * resource->layer_stride +
                      resource->level_offset[level] +
                      (size_t)y * resource->level_stride[level] +
-                     (size_t)x * format_size,
-                  sum, 1);
+                     (size_t)x * format_size;
+               if (depth)
+                  util_format_pack_z_float(format, destination, sum, 1);
+               else
+                  util_format_pack_rgba(format, destination, sum, 1);
             }
          }
       }
@@ -6801,7 +7179,7 @@ ps5_draw_vbo_locked(struct pipe_context *base,
          return;
       }
       for (element_index = 0;
-           element_index < context->vertex_elements->count;
+           element_index < vertex_layout.count;
            ++element_index) {
          const struct pipe_vertex_element *element =
             &context->vertex_elements->elements[element_index];
@@ -6874,7 +7252,7 @@ ps5_draw_vbo_locked(struct pipe_context *base,
          if (!(binding_mask & BITFIELD_BIT(binding)))
             continue;
          for (element_index = 0;
-              element_index < context->vertex_elements->count;
+              element_index < vertex_layout.count;
               ++element_index) {
             if (context->vertex_elements->elements[element_index]
                    .vertex_buffer_index == binding) {
@@ -7074,6 +7452,8 @@ ps5_draw_vbo_locked(struct pipe_context *base,
       uint32_t target_widths[PS5_MAX_RENDER_TARGETS];
       uint32_t target_heights[PS5_MAX_RENDER_TARGETS];
       uint32_t target_views[PS5_MAX_RENDER_TARGETS];
+      uint32_t target_pitches[PS5_MAX_RENDER_TARGETS] = {0};
+      bool any_linear = false;
       struct ps5_resource *fallback = NULL;
       struct ps5_screen *screen = (struct ps5_screen *)base->screen;
 
@@ -7093,13 +7473,17 @@ ps5_draw_vbo_locked(struct pipe_context *base,
 
       for (unsigned i = 0; i < color_target_count; ++i) {
          const struct pipe_surface *surface = &context->framebuffer.cbufs[i];
-         struct ps5_resource *target = context->framebuffer.cbufs[i].texture
-            ? (struct ps5_resource *)context->framebuffer.cbufs[i].texture
+         struct ps5_resource *target = surface->texture
+            ? (struct ps5_resource *)surface->texture
             : fallback;
          size_t layer_offset = 0;
+         /* ponytail: qualify single-target mip/layer draws first; MRT retains
+          * existing staging until mixed-layout native coverage is available. */
+         target_pitches[i] = color_target_count == 1 ? ps5_linear_color_pitch(surface) : 0;
+         any_linear |= target_pitches[i] != 0;
 
          if (surface->texture) {
-            if (target->render_staging_size) {
+            if (target->render_staging_size && !target_pitches[i]) {
                if (!ps5_stage_color_surface(surface, true)) {
                   context->last_draw_status = -5;
                   return;
@@ -7117,13 +7501,15 @@ ps5_draw_vbo_locked(struct pipe_context *base,
             return;
          }
          targets[i] = target->data + layer_offset;
-         target_sizes[i] = surface->texture && target->render_staging_size
+         target_sizes[i] = target_pitches[i] ? target->size - layer_offset :
+                          surface->texture && target->render_staging_size
                               ? target->render_staging_size
                               : target->allocation_size - layer_offset;
-         target_widths[i] = surface->texture ? ps5_surface_width(surface)
-                                             : target->base.width0;
-         target_heights[i] = surface->texture ? ps5_surface_height(surface)
-                                              : target->base.height0;
+         /* Missing color slots have writes disabled. Describe only one texel:
+          * the single-sample display pool is not a full-size MSAA allocation.
+          * Raster bounds and depth dimensions still use the real framebuffer. */
+         target_widths[i] = surface->texture ? ps5_surface_width(surface) : 1;
+         target_heights[i] = surface->texture ? ps5_surface_height(surface) : 1;
          target_views[i] = surface->texture &&
                            surface->last_layer > surface->first_layer
                               ? (surface->last_layer -
@@ -7149,7 +7535,13 @@ ps5_draw_vbo_locked(struct pipe_context *base,
             return;
          }
       }
-      if (((PS5_ENABLE_MRT_CANDIDATE ||
+      if (any_linear) {
+         if (ps5_agc_gate2_set_color_target_layouts(targets, target_sizes, target_info,
+                target_widths, target_heights, target_pitches, color_target_count) != 0) {
+            context->last_draw_status = -25;
+            return;
+         }
+      } else if (((PS5_ENABLE_MRT_CANDIDATE ||
             PS5_ENABLE_DYNAMIC_COLOR_TARGET_CANDIDATE)
              ? ps5_agc_gate2_set_framebuffers(
                   targets, target_sizes, color_target_count)
@@ -7158,14 +7550,14 @@ ps5_draw_vbo_locked(struct pipe_context *base,
          context->last_draw_status = -5;
          return;
       }
-      if ((PS5_ENABLE_FRAMEBUFFER_SRGB_CANDIDATE ||
+      if (!any_linear && (PS5_ENABLE_FRAMEBUFFER_SRGB_CANDIDATE ||
            PS5_ENABLE_TEXTURE_RG_CANDIDATE) &&
           ps5_agc_gate2_set_color_target_info(
              target_info, color_target_count) != 0) {
          context->last_draw_status = -24;
          return;
       }
-      if (PS5_ENABLE_DYNAMIC_COLOR_TARGET_CANDIDATE &&
+      if (!any_linear && PS5_ENABLE_DYNAMIC_COLOR_TARGET_CANDIDATE &&
           ps5_agc_gate2_set_color_target_extents(
              target_widths, target_heights,
              color_target_count) != 0) {
@@ -7366,11 +7758,13 @@ ps5_draw_vbo_locked(struct pipe_context *base,
             ? (const struct ps5_resource *)surface->texture : NULL;
 
          if (target && target->render_staging_size &&
+             (context->framebuffer.nr_cbufs != 1 || !ps5_linear_color_pitch(surface)) &&
              !ps5_stage_color_surface(surface, false)) {
             context->last_draw_status = -29;
             break;
          }
          if (target && target->render_staging_size &&
+             (context->framebuffer.nr_cbufs != 1 || !ps5_linear_color_pitch(surface)) &&
              context->samplers[1][0] &&
              ((const struct ps5_sampler_state *)
                  context->samplers[1][0])->base.compare_mode)
@@ -8229,10 +8623,10 @@ ps5_clear_gpu_color(struct ps5_context *context, unsigned buffers,
                     const struct pipe_scissor_state *scissor_state,
                     const union pipe_color_union *color)
 {
-   /* ponytail: accelerate only full, single-layer RGBA8 clears. Extend after
-    * affected format/mask/query tests; every other case keeps the CPU path. */
+   /* Native, single-layer color targets only. Masks and staged images keep
+    * their checked CPU path; a scissored rectangle uses the same blitter. */
    if (!PS5_ENABLE_MRT_CANDIDATE || !PS5_ENABLE_UBO_CANDIDATE || !context ||
-       !context->framebuffer_valid || !color || scissor_state ||
+       !context->framebuffer_valid || !color ||
        (buffers & PIPE_CLEAR_COLOR) != PIPE_CLEAR_COLOR0 ||
        (color_clear_mask & PIPE_MASK_RGBA) != PIPE_MASK_RGBA ||
        context->framebuffer.nr_cbufs != 1 || context->render_condition_query ||
@@ -8243,7 +8637,11 @@ ps5_clear_gpu_color(struct ps5_context *context, unsigned buffers,
    /* Tiny clears cost less on the CPU than the measured ~16 ms GPU round trip.
     * ponytail: conservative floor; tune PS5_GPU_CLEAR_MIN_PIXELS with paired
     * measurements before extending the CPU preference to larger surfaces. */
-   if ((uint64_t)context->framebuffer.width * context->framebuffer.height <
+   unsigned left, bottom, right, top;
+   ps5_clear_bounds(scissor_state, context->framebuffer.width, context->framebuffer.height,
+                     &left, &bottom, &right, &top);
+   if (right <= left || top <= bottom ||
+       (uint64_t)(right - left) * (top - bottom) <
        PS5_GPU_CLEAR_MIN_PIXELS)
       return false;
 
@@ -8252,7 +8650,9 @@ ps5_clear_gpu_color(struct ps5_context *context, unsigned buffers,
    if (!target || target->base.target != PIPE_TEXTURE_2D ||
        target->base.nr_samples > 1 || target->base.nr_storage_samples > 1 ||
        target->render_staging_size || surface->level || surface->first_layer ||
-       surface->last_layer || surface->format != PIPE_FORMAT_R8G8B8A8_UNORM ||
+       surface->last_layer ||
+       (surface->format != PIPE_FORMAT_R8G8B8A8_UNORM && surface->format != PIPE_FORMAT_R8_UNORM &&
+        surface->format != PIPE_FORMAT_R8G8_UNORM && surface->format != PIPE_FORMAT_R16G16B16A16_FLOAT) ||
        target->base.format != surface->format ||
        context->framebuffer.width != ps5_surface_width(surface) ||
        context->framebuffer.height != ps5_surface_height(surface))
@@ -8285,6 +8685,7 @@ ps5_clear_gpu_color(struct ps5_context *context, unsigned buffers,
       return false;
 
    bool viewport_valid = context->viewport_valid;
+   bool framebuffer_valid = context->framebuffer_valid;
    bool queries_enabled = context->queries_enabled;
    unsigned draws_before = context->draw_calls;
    util_blitter_save_vertex_buffers(blitter, context->vertex_buffers, context->vertex_buffer_count);
@@ -8300,19 +8701,29 @@ ps5_clear_gpu_color(struct ps5_context *context, unsigned buffers,
    util_blitter_save_viewport(blitter, &context->viewport);
    util_blitter_save_sample_mask(blitter, context->sample_mask, 1);
    util_blitter_save_fragment_constant_buffer_slot(blitter, &cb);
+   if (scissor_state)
+      util_blitter_save_framebuffer(blitter, &context->framebuffer);
 
-   /* Match the CPU fallback's RGBA8 quantization exactly. */
-   uint8_t packed[4];
+   /* Match the CPU fallback's target-format quantization. */
+   uint8_t packed[16];
    union pipe_color_union quantized;
    util_format_pack_rgba(surface->format, packed, color->ui, 1);
    util_format_unpack_rgba(surface->format, quantized.ui, packed, 1);
    /* Only this validated color operation may defer its internal fan. The
     * caller has already completed any CPU depth/stencil part of a mixed clear. */
-   context->deferred_color_clear = buffers == PIPE_CLEAR_COLOR0;
-   util_blitter_clear(blitter, context->framebuffer.width, context->framebuffer.height,
-                      1, PIPE_CLEAR_COLOR0, &quantized, 0, 0, false);
+   context->deferred_color_clear = buffers == PIPE_CLEAR_COLOR0 && !scissor_state &&
+                                  surface->format == PIPE_FORMAT_R8G8B8A8_UNORM;
+   if (scissor_state) {
+      struct pipe_surface selected = *surface;
+      util_blitter_clear_render_target(blitter, &selected, &quantized,
+                                        left, bottom, right - left, top - bottom);
+   } else {
+      util_blitter_clear(blitter, context->framebuffer.width, context->framebuffer.height,
+                         1, PIPE_CLEAR_COLOR0, &quantized, 0, 0, false);
+   }
    context->deferred_color_clear = false;
    context->viewport_valid = viewport_valid;
+   context->framebuffer_valid = framebuffer_valid;
    context->queries_enabled = queries_enabled;
    if (context->draw_calls == draws_before)
       context->last_draw_status = -30; /* Blitter upload failed before drawing. */
@@ -8324,6 +8735,85 @@ ps5_clear_gpu_color(struct ps5_context *context, unsigned buffers,
 }
 
 static bool
+ps5_clear_gpu_depth_stencil(struct ps5_context *context, unsigned buffers,
+                            uint8_t stencil_clear_mask,
+                            const struct pipe_scissor_state *scissor_state,
+                            double depth, unsigned stencil)
+{
+   /* Full depth memset is already fast; pay a draw round trip only for large
+    * per-pixel clears. Partial stencil masks retain the checked CPU merge. */
+   if (!PS5_ENABLE_MRT_CANDIDATE || !context || !context->framebuffer_valid ||
+       !(buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) ||
+       (buffers & ~(PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) ||
+       (!scissor_state && !(buffers & PIPE_CLEAR_STENCIL)) ||
+       ((buffers & PIPE_CLEAR_STENCIL) && stencil_clear_mask != 0xff) ||
+       ((buffers & PIPE_CLEAR_DEPTH) && !(depth >= 0.0 && depth <= 1.0)) ||
+       context->render_condition_query || context->stream_output_target_count ||
+       context->active_occlusion_query || context->active_primitives_generated_query ||
+       context->active_primitives_emitted_query)
+      return false;
+   struct pipe_surface surface = context->framebuffer.zsbuf;
+   const struct ps5_resource *target = (const struct ps5_resource *)surface.texture;
+   if (!target || target->base.target != PIPE_TEXTURE_2D ||
+       target->base.nr_samples > 1 || target->base.nr_storage_samples > 1 ||
+       target->base.last_level || target->base.array_size != 1 ||
+       target->base.depth0 != 1 || !context->framebuffer.width || !context->framebuffer.height ||
+       target->base.width0 > PS5_MAX_DEPTH_WIDTH || target->base.height0 > PS5_MAX_DEPTH_HEIGHT ||
+       context->framebuffer.width > target->base.width0 ||
+       context->framebuffer.height > target->base.height0 ||
+       target->depth_staging_size || surface.level || surface.first_layer || surface.last_layer ||
+       (surface.format != PIPE_FORMAT_Z32_FLOAT &&
+        surface.format != PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) ||
+       target->base.format != surface.format || !target->data ||
+       ps5_tiled_depth_surface_size(target->base.width0, target->base.height0, 1) >
+          target->allocation_size ||
+       ((buffers & PIPE_CLEAR_STENCIL) &&
+        (surface.format != PIPE_FORMAT_Z32_FLOAT_S8X24_UINT || !target->stencil_data ||
+         ps5_tiled_stencil_surface_size(target->base.width0, target->base.height0) >
+            target->stencil_allocation_size)))
+      return false;
+   unsigned left, bottom, right, top;
+   ps5_clear_bounds(scissor_state, context->framebuffer.width, context->framebuffer.height,
+                     &left, &bottom, &right, &top);
+   if (right <= left || top <= bottom ||
+       (uint64_t)(right - left) * (top - bottom) < PS5_GPU_BLIT_MIN_PIXELS)
+      return false;
+
+   if (!context->blitter)
+      context->blitter = util_blitter_create(&context->base);
+   struct blitter_context *blitter = context->blitter;
+   if (!blitter || blitter->running)
+      return false;
+   bool viewport_valid = context->viewport_valid, framebuffer_valid = context->framebuffer_valid;
+   bool queries_enabled = context->queries_enabled;
+   unsigned draws_before = context->draw_calls;
+   util_blitter_save_vertex_buffers(blitter, context->vertex_buffers, context->vertex_buffer_count);
+   util_blitter_save_vertex_elements(blitter, context->vertex_elements);
+   util_blitter_save_vertex_shader(blitter, context->vs);
+   util_blitter_save_geometry_shader(blitter, context->gs);
+   util_blitter_save_so_targets(blitter, 0, NULL, context->stream_output_primitive);
+   util_blitter_save_rasterizer(blitter, context->rasterizer);
+   util_blitter_save_fragment_shader(blitter, context->fs);
+   util_blitter_save_depth_stencil_alpha(blitter, context->depth_stencil_alpha);
+   util_blitter_save_blend(blitter, context->blend);
+   util_blitter_save_stencil_ref(blitter, &context->stencil_ref);
+   util_blitter_save_viewport(blitter, &context->viewport);
+   util_blitter_save_sample_mask(blitter, context->sample_mask, 1);
+   util_blitter_save_framebuffer(blitter, &context->framebuffer);
+   util_blitter_clear_depth_stencil(blitter, &surface, buffers, depth, stencil,
+                                     left, bottom, right - left, top - bottom);
+   context->viewport_valid = viewport_valid;
+   context->framebuffer_valid = framebuffer_valid;
+   context->queries_enabled = queries_enabled;
+   if (context->draw_calls == draws_before)
+      context->last_draw_status = -30;
+   if (context->last_draw_status || draws_before < 3)
+      printf("[ps5-gallium] clear-gpu-depth-stencil status=%d draws=%u\n",
+             context->last_draw_status, context->draw_calls - draws_before);
+   return true; /* Handled even on failure: never replay an attempted GPU operation. */
+}
+
+static bool
 ps5_clear_depth_stencil(struct ps5_context *context, unsigned buffers,
                          uint8_t stencil_clear_mask,
                          const struct pipe_scissor_state *scissor_state,
@@ -8331,8 +8821,6 @@ ps5_clear_depth_stencil(struct ps5_context *context, unsigned buffers,
 {
    struct ps5_resource *resource;
    uint32_t clear_bits;
-   uint32_t *words;
-   size_t count;
    size_t index;
    size_t depth_layer_size = 0;
    size_t stencil_layer_size = 0;
@@ -8355,16 +8843,33 @@ ps5_clear_depth_stencil(struct ps5_context *context, unsigned buffers,
    if (resource && resource->depth_staging_size &&
        (buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL))) {
       const struct pipe_surface *surface = &context->framebuffer.zsbuf;
-      unsigned width = ps5_surface_width(surface);
-      unsigned height = ps5_surface_height(surface);
+      const bool packed = resource->base.format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT;
+      const unsigned pixel_size = packed ? 8 : 4;
+      unsigned width, height;
       unsigned min_x, min_y, max_x, max_y;
+      size_t stride, span;
 
       if (!context->framebuffer_valid ||
-          buffers != PIPE_CLEAR_DEPTH ||
-          resource->base.format != PIPE_FORMAT_Z32_FLOAT ||
+          (buffers & ~(PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) ||
+          (resource->base.format != PIPE_FORMAT_Z32_FLOAT && !packed) ||
+          ((buffers & PIPE_CLEAR_STENCIL) && !packed) ||
+          resource->base.nr_samples > 1 || !resource->data ||
+          surface->level > resource->base.last_level ||
+          surface->level >= ARRAY_SIZE(resource->level_stride) || surface->level >= 32 ||
           first_depth_layer > last_depth_layer ||
           last_depth_layer >= ps5_surface_layer_count(surface) ||
-          !(depth >= 0.0 && depth <= 1.0))
+          !resource->layer_stride || resource->size > resource->allocation_size ||
+          last_depth_layer >= resource->size / resource->layer_stride ||
+          ((buffers & PIPE_CLEAR_DEPTH) && !(depth >= 0.0 && depth <= 1.0)))
+         goto reject;
+      width = ps5_surface_width(surface);
+      height = ps5_surface_height(surface);
+      stride = resource->level_stride[surface->level];
+      if (stride < (uint64_t)width * pixel_size || stride > SIZE_MAX / height)
+         goto reject;
+      span = (height - 1u) * stride + (size_t)width * pixel_size;
+      if (resource->level_offset[surface->level] > resource->layer_stride ||
+          span > resource->layer_stride - resource->level_offset[surface->level])
          goto reject;
 
       ps5_clear_bounds(scissor_state, width, height,
@@ -8379,13 +8884,18 @@ ps5_clear_depth_stencil(struct ps5_context *context, unsigned buffers,
             for (unsigned x = min_x; x < max_x; ++x) {
                size_t offset = layer_base +
                   (size_t)y * resource->level_stride[surface->level] +
-                  (size_t)x * sizeof(clear_bits);
+                  (size_t)x * pixel_size;
 
                if (offset > resource->size ||
-                   resource->size - offset < sizeof(clear_bits))
+                   resource->size - offset < pixel_size)
                   goto reject;
-               memcpy(resource->data + offset, &clear_bits,
-                      sizeof(clear_bits));
+               if (buffers & PIPE_CLEAR_DEPTH)
+                  memcpy(resource->data + offset, &clear_bits, sizeof(clear_bits));
+               if (buffers & PIPE_CLEAR_STENCIL) {
+                  uint8_t *value = resource->data + offset + sizeof(clear_bits);
+                  *value = (*value & ~stencil_clear_mask) |
+                           ((uint8_t)stencil & stencil_clear_mask);
+               }
             }
          }
       }
@@ -8428,10 +8938,8 @@ reject:
          uint8_t *layer_data = resource->data + layer * depth_layer_size;
 
          if (!scissor_state) {
-            words = (uint32_t *)layer_data;
-            count = depth_layer_size / sizeof(*words);
-            for (index = 0; index < count; ++index)
-               words[index] = clear_bits;
+            util_memset32(layer_data, clear_bits,
+                          depth_layer_size / sizeof(clear_bits));
          } else {
             unsigned min_x, min_y, max_x, max_y;
 
@@ -8444,9 +8952,9 @@ reject:
                        sample < MAX2(resource->base.nr_samples, 1); ++sample) {
                      size_t offset = resource->base.nr_samples == 4
                         ? ps5_tiled_depth_msaa4_offset(
-                             x, y, sample, resource->base.width0)
+                             x, y, sample, resource->base.width0, layer)
                         : ps5_tiled_depth_offset(
-                             x, y, resource->base.width0);
+                             x, y, resource->base.width0, layer);
 
                      if (offset > depth_layer_size ||
                          depth_layer_size - offset < sizeof(clear_bits))
@@ -8485,9 +8993,9 @@ reject:
                        sample < MAX2(resource->base.nr_samples, 1); ++sample) {
                      size_t offset = resource->base.nr_samples == 4
                         ? ps5_tiled_stencil_msaa4_offset(
-                             x, y, sample, resource->base.width0)
+                             x, y, sample, resource->base.width0, layer)
                         : ps5_tiled_stencil_offset(
-                             x, y, resource->base.width0);
+                             x, y, resource->base.width0, layer);
 
                      if (offset >= stencil_layer_size)
                         goto reject;
@@ -8531,7 +9039,11 @@ ps5_clear(struct pipe_context *base, unsigned buffers,
     * queue. No later CPU attachment clear may drain that new color/draw batch. */
    unsigned depth_buffers = buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL);
    if (depth_buffers) {
-      if (!ps5_clear_depth_stencil(context, depth_buffers, stencil_clear_mask,
+      if (ps5_clear_gpu_depth_stencil(context, depth_buffers, stencil_clear_mask,
+                                      scissor_state, depth, stencil)) {
+         if (context->last_draw_status != 0)
+            return;
+      } else if (!ps5_clear_depth_stencil(context, depth_buffers, stencil_clear_mask,
                                    scissor_state, depth, stencil))
          return;
       buffers &= ~depth_buffers;
@@ -8873,7 +9385,10 @@ ps5_vertex_layout_from_state(const struct ps5_shader *shader,
       attribute->alignment = 4;
       attribute->instance_divisor = element->instance_divisor;
    }
-   return element_index == (elements ? elements->count : 0);
+   /* A shared vertex-element state may contain unused trailing attributes
+    * (Mesa's position-only depth-clear VS uses its two-element blit state).
+    * Every consumed element was validated above; unused elements need no fetch. */
+   return true;
 }
 
 static bool

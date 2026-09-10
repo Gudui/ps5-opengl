@@ -8,17 +8,20 @@ import argparse
 import json
 import math
 from pathlib import Path
+from opengl_receipts import normalize_log_tags
 import re
 
 
 def summarize(text, host=False, submit_profile=False, deferred_batches=False, present_profile=False,
               clear_batches=False, soak=False, window_target=None, window_height=1080,
-              output_status=False, prepare_profile=False, soak_seconds=300):
+              output_status=False, prepare_profile=False, soak_seconds=300, soak_target=60,
+              strict_soak_fps=True):
     def require(ok, message):
         if not ok:
             raise ValueError(message)
 
     require(60 <= soak_seconds <= 1800 and soak_seconds % 30 == 0, "invalid soak duration")
+    require(soak_target in (60, 120), "invalid soak cadence target")
 
     if window_target is not None and not host:
         present_profile = clear_batches = True
@@ -51,7 +54,7 @@ def summarize(text, host=False, submit_profile=False, deferred_batches=False, pr
     require(finished == [(str(frames + warmup), "0")], "frame count or cleanup mismatch")
     require(re.findall(r"\[ps5-imgui\] finished status=(\d+)", text) == ["0"], "EGL cleanup failed")
     if not host:
-        require(re.findall(r"\[pss-opengl-native\] gate completed status=(\d+)", text) == ["0"],
+        require(re.findall(r"\[ps5-opengl-native\] gate completed status=(\d+)", normalize_log_tags(text)) == ["0"],
                 "native gate incomplete")
     report = dict(mode="host-reference" if host else "PS5", frames=frames, warmup=warmup, **values)
     if soak:
@@ -66,9 +69,12 @@ def summarize(text, host=False, submit_profile=False, deferred_batches=False, pr
                 "periodic pixel probes do not match cadence windows")
         points.append((frames + warmup, float(soak_seconds)))
         fps = [(n1 - n0) / (t1 - t0) for (n0, t0), (n1, t1) in zip(points, points[1:])]
-        require(all(59.0 <= rate <= 60.5 for rate in fps) and values["cpu_wall_ms"] <= 1000 / 59.0,
-                "sustained 60 Hz performance target not met")
-        report["soak"] = dict(seconds=soak_seconds, window_fps=fps, pixel_probes=len(probes))
+        low, high = 59.0 * soak_target / 60, 60.5 * soak_target / 60
+        target_met = all(low <= rate <= high for rate in fps) and values["cpu_wall_ms"] <= 1000 / low
+        require(target_met or not strict_soak_fps,
+                f"sustained {soak_target} Hz performance target not met")
+        report["soak"] = dict(seconds=soak_seconds, target_fps=soak_target,
+                              target_met=target_met, window_fps=fps, pixel_probes=len(probes))
     if deferred_batches or clear_batches:
         chunks = re.findall(r"\[ps5-deferred-batch\] draws=(\d+) result=0", text)
         native = re.findall(r"\[ps5-multidraw-batch\] draws=(\d+) attempted=(\d+) waits=(\d+) result=0", text)
@@ -306,7 +312,7 @@ def self_test():
 [ps5-imgui-perf] frames=100 warmup=30 ui_ms=1 clear_ms=2 draw_ms=3 readback_ms=0 swap_ms=4 cpu_wall_ms=10 status=0
 [ps5-imgui-tv] finished frames=130 changes=0 status=0
 [ps5-imgui] finished status=0
-[pss-opengl-native] gate completed status=0
+[ps5-opengl-native] gate completed status=0
 """
     assert summarize(text)["cpu_wall_ms"] == 10
     preparation = ("[ps5-prepare-perf] calls=300 failures=0 warmup_frames=30 "
@@ -347,6 +353,20 @@ def self_test():
         longer += f"[ps5-imgui-tv] visible frame={i * 1800} elapsed={i * 30:.1f} pad=0 changes=0 vertices=100\n"
         longer += f"[ps5-imgui-tv] readback frame={i * 1800} rgba=45,215,245,255 PASS\n"
     assert summarize(longer, soak=True, soak_seconds=600)["soak"]["window_fps"] == [60.0] * 20
+    hfr = longer.replace("frames=35970", "frames=71970").replace("frames=36000", "frames=72000").replace(
+        "frames=35979", "frames=71979").replace("swap_ms=10.683 cpu_wall_ms=16.683",
+                                               "swap_ms=2.342 cpu_wall_ms=8.342")
+    hfr = re.sub(r"frame=(\d+)", lambda m: f"frame={int(m[1]) * (2 if int(m[1]) > 10 else 1)}", hfr)
+    assert summarize(hfr, soak=True, soak_seconds=600, soak_target=120)["soak"]["window_fps"] == [120.0] * 20
+    missed = summarize(longer, soak=True, soak_seconds=600, soak_target=120, strict_soak_fps=False)
+    assert missed["soak"]["target_met"] is False and missed["soak"]["window_fps"] == [60.0] * 20
+    for bad, target in ((hfr, 60), (longer, 120), (hfr, 119),
+                        (hfr.replace("frame=3600 elapsed=30.0", "frame=1800 elapsed=30.0"), 120)):
+        try:
+            summarize(bad, soak=True, soak_seconds=600, soak_target=target)
+        except ValueError:
+            continue
+        raise AssertionError("Invalid HFR soak accepted")
     for bad in (soak_text.replace("frame=1800 elapsed=30.0", "frame=900 elapsed=30.0"),
                 soak_text.replace("readback frame=1800", "readback frame=1801"),
                 soak_text.replace("elapsed=270.0", "elapsed=275.0"),
@@ -356,6 +376,13 @@ def self_test():
         except ValueError:
             continue
         raise AssertionError("Invalid soak accepted")
+    try:
+        summarize(soak_text.replace("readback frame=1800", "readback frame=1801"),
+                  soak=True, strict_soak_fps=False)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Reporting a cadence miss bypassed pixel coverage checks")
     for bad in (gpu_present * 2, gpu_present.replace("128", "127"), gpu_present.replace("128", "130")):
         try:
             summarize(text + bad)
@@ -463,6 +490,10 @@ if __name__ == "__main__":
     parser.add_argument("--clear-batches", action="store_true")
     parser.add_argument("--soak", action="store_true")
     parser.add_argument("--soak-seconds", type=int, default=300)
+    parser.add_argument("--soak-target", type=int, choices=(60, 120), default=60,
+                        help="Required sustained cadence; does not validate HDMI output")
+    parser.add_argument("--report-cadence-miss", action="store_true",
+                        help="Report soak target_met=false instead of rejecting slow cadence; retains all correctness checks")
     parser.add_argument("--window-target", type=int, choices=(30, 60, 90, 120))
     parser.add_argument("--window-height", type=int, choices=(1080, 1440, 2160), default=1080)
     parser.add_argument("--output-status", action="store_true")
@@ -476,4 +507,5 @@ if __name__ == "__main__":
         print(json.dumps(summarize(args.receipt.read_text(), args.host, args.submit_profile,
                                    args.deferred_batches, args.present_profile, args.clear_batches, args.soak,
                                    args.window_target, args.window_height, args.output_status,
-                                   args.prepare_profile, args.soak_seconds), indent=2))
+                                   args.prepare_profile, args.soak_seconds, args.soak_target,
+                                   not args.report_cadence_miss), indent=2))

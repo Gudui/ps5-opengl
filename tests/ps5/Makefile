@@ -1725,6 +1725,37 @@ egl_public_core33_msaa4_texture_fetch.o: egl_public_core33_msaa4.c
 egl_public_core33_scaled_linear_blit.o: egl_public_core33_scaled_linear_blit.c
 	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
 
+egl_public_core33_gpu_blit.o: egl_public_core33_gpu_blit.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
+egl_public_core33_gpu_blit_extended.o: egl_public_core33_gpu_blit_extended.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
+egl_public_core33_gpu_clear_extended.o: egl_public_core33_gpu_clear_extended.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
+egl_public_core33_native_color_formats.o: egl_public_core33_native_color_formats.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
+egl_public_core33_gpu_mipmap.o: egl_public_core33_gpu_mipmap.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
+# Reuse the three complete oracles; local symbols stay separate in a relocatable object.
+egl_public_core33_gpu_transfer_regression.o: gpu_transfer_regression_main.o gpu_transfer_regression_blit.o gpu_transfer_regression_clear.o gpu_transfer_regression_formats.o
+	$(LD) -r -o $@ $^
+
+gpu_transfer_regression_main.o: egl_public_core33_gpu_transfer_regression.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+gpu_transfer_regression_blit.o: egl_public_core33_gpu_blit_extended.c
+	$(CC) $(CFLAGS) -Dmain=ps5_transfer_blit_main -c -o $@ $<
+
+gpu_transfer_regression_clear.o: egl_public_core33_gpu_clear_extended.c
+	$(CC) $(CFLAGS) -Dmain=ps5_transfer_clear_main -c -o $@ $<
+
+gpu_transfer_regression_formats.o: egl_public_core33_native_color_formats.c
+	$(CC) $(CFLAGS) -Dmain=ps5_transfer_formats_main -c -o $@ $<
+
 egl_public_core33_depth_stencil_blit.o: \
 	egl_public_core33_depth_stencil_blit.c
 	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
@@ -1819,6 +1850,12 @@ egl_public_core33_depth_transfer.o: egl_public_core33_depth_transfer.c
 egl_public_core33_depth_array.o: egl_public_core33_depth_array.c
 	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
 
+egl_public_core33_depth_array_samples.o: egl_public_core33_depth_array_samples.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
+egl_public_core33_msaa4_depth_array_texture.o: egl_public_core33_msaa4_depth_array_texture.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
 egl_public_core33_layered_depth.o: egl_public_core33_layered_depth.c
 	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
 
@@ -1826,6 +1863,9 @@ egl_public_core33_depth_targets.o: egl_public_core33_depth_targets.c
 	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
 
 egl_public_core33_depth_mip_target.o: egl_public_core33_depth_mip_target.c
+	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
+
+egl_public_core33_depth_mip_blit.o: egl_public_core33_depth_mip_blit.c
 	$(CC) $(CFLAGS) -DGL_GLEXT_PROTOTYPES=1 -c -o $@ $<
 
 egl_public_core33_scissored_clear.o: egl_public_core33_scissored_clear.c
@@ -2120,6 +2160,8 @@ clean:
 		egl_public_core33_pixel_buffer.o \
 		egl_public_core33_depth_transfer.o \
 		egl_public_core33_depth_array.o \
+		egl_public_core33_depth_array_samples.o \
+		egl_public_core33_msaa4_depth_array_texture.o \
 		egl_public_core33_layered_depth.o \
 		egl_public_core33_depth_targets.o \
 		egl_public_core33_depth_mip_target.o \

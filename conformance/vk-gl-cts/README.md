@@ -1,9 +1,9 @@
 # Khronos OpenGL CTS for PS5
 
-This overlay targets KhronosGroup/VK-GL-CTS commit
-`cf7edb26d3be2d8763595ed08fdc41f3c1b1966f` and provides the platform
-adapter used to run the `KHR-GL33` package through the public PS5 EGL and
-OpenGL entrypoints.
+This overlay runs `KHR-GL33` through public PS5 EGL/OpenGL entrypoints. It accepts
+the historical development pin `cf7edb26d3be2d8763595ed08fdc41f3c1b1966f` and the
+official `opengl-cts-4.6.8.1` release, commit
+`067e8832315e79817ede1c4863804e440f5d1c80`.
 
 The six recorded patches cover build/package routing, portable stdio, and one
 test correction: desktop compute-shader templates require GLSL 4.30 rather
@@ -12,6 +12,35 @@ This is a locally adapted CTS runner, not an untouched upstream executable.
 The exhaustive swizzle and LOD-bias test bodies remain unchanged. A 2026-09-05
 source comparison verified upstream plus exactly these patches and the seven
 byte-identical platform-overlay files, with no other tracked-source changes.
+
+The release path applies only patches 0001–0004 and 0006. It deliberately leaves
+the negative-shader test unchanged, including the known compute-stage issue.
+The separately [validated local correction](../../docs/cts-qualification.md#validated-local-correction)
+does not change this default or establish upstream acceptance.
+`verify-source.sh` compares tracked files against the selected base plus the
+prescribed patches, and checks all seven platform overlay files byte-for-byte.
+The adapter queries actual default-framebuffer bits/samples, checks them against
+EGL, and rejects unsupported surface/config requests rather than substituting
+a fixed target description. It still provides only pbuffer contexts; this is
+not a completed Khronos submission port.
+
+Prepare a separate release checkout and build stage, preserving historical data:
+
+```sh
+git clone --depth 1 --branch opengl-cts-4.6.8.1 \
+  https://github.com/KhronosGroup/VK-GL-CTS.git third_party/VK-GL-CTS-4.6.8.1
+python3 third_party/VK-GL-CTS-4.6.8.1/external/fetch_sources.py
+VK_GL_CTS_ROOT="$PWD/third_party/VK-GL-CTS-4.6.8.1" \
+PS5_CTS_APP_STAGE="$PWD/build/cts-release-4.6.8.1" \
+PS5_OPENGL_PREFIX="$PWD/build/sdk/ps5-opengl-core33" \
+bash tools/build-native-cts-app.sh
+```
+
+Set `PS5_NATIVE_APP_TEMPLATE` to the prepared native boilerplate directory.
+Use `--mustpass` with both `prepare-cts-shard.py` and `verify-cts-candidate.py`
+to select the release's exact inventory. Matching case names do not make
+development and release test implementations interchangeable. See the
+[campaign prerequisites](../../docs/cts-campaign.md) before acceptance collection.
 
 The upstream checkout is intentionally ignored under
 `third_party/VK-GL-CTS`. Prepare it with:
@@ -35,12 +64,12 @@ cmake --build third_party/VK-GL-CTS/build-ps5-gl33 \
   --target ps5-gl33-runner -j8
 ```
 
-`ps5-gl33-package` registers only `KHR-GL33`; it deliberately excludes the
-upstream monolithic GLES/EGL package registry from the PS5 application.
+`ps5-gl33-package` registers `KHR-GL33` and the upstream `CTS-Configs`
+diagnostic; it excludes the monolithic GLES/EGL test registry from the app.
 `ps5-gl33-runner` adds the native-title entry point. It reads one bounded CTS
 argument per line from `/app0/cts-args.txt`, writes the full QPA log to
-`/download0/pss-opengl-cts.qpa`, and writes a compact machine-readable status
-to `/download0/pss-opengl-cts.status`.
+`/download0/ps5-opengl-cts.qpa`, and writes a compact machine-readable status
+to `/download0/ps5-opengl-cts.status`.
 
 This is conformance infrastructure, not a claim of conformance. The official
 GL 3.3 must-pass list currently contains 9,886 cases. Results must be produced
@@ -93,8 +122,13 @@ so hashes cover the original container bytes, not a reconstructed ELF view.
 During development, use `prepare-cts-shard.py --suite smoke` or `--case-list`
 for an affected regression. `summarize-cts-qpa.py --inventory <results> --output
 <ledger.json>` preserves historical build identities and extracts timings;
-`--timings <ledger.json> --budget-seconds 180` selects a measured prefix.
+`--timings <ledger.json> --budget-seconds 120` selects a measured prefix;
+reserve startup margin and obtain approval before exceeding the native run bound.
 The complete four-configuration matrix is a release gate, not a per-fix loop.
+
+Custom case lists select names; the generator writes them in pinned must-pass
+order because CTS traverses its registered test tree, not the input-file order.
+The strict receipt checker still requires exact ordered completion.
 
 Use `tools/summarize-cts-qpa.py receipt.qpa --expected-list cts-shard.txt` to
 verify ordered completion and list any failing case names. The command returns

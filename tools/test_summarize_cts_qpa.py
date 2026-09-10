@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import unittest
 import runpy
+from opengl_receipts import LEGACY_NAME
 
 
 ROOT = Path(__file__).resolve().parent
@@ -119,7 +120,10 @@ class QpaSummaryTest(unittest.TestCase):
                 prefix = work / f"PPSA99005-{index}"
                 text = qpa([("KHR-GL33.a", status), ("KHR-GL33.optional", "NotSupported")]).replace(
                     '<Result', '<Number Name="TestDuration" Unit="us">2000</Number>\n<Result')
-                Path(f"{prefix}-pss-opengl-cts.qpa").write_text(command + text)
+                namespace = LEGACY_NAME if index == 0 else "ps5-opengl"
+                selected_command = command if index == 0 else command.replace(
+                    '--deqp-base-seed=1', '--deqp-base-seed=1 --deqp-surface-type=pbuffer')
+                Path(f"{prefix}-{namespace}-cts.qpa").write_text(selected_command + text)
                 Path(f"{prefix}-cts-shard.txt").write_text("KHR-GL33.a\nKHR-GL33.optional\n")
                 Path(f"{prefix}-result.json").write_text(json.dumps(dict(
                     ebootSha256=str(index)*64, outcome="entered-eboot",
@@ -130,12 +134,44 @@ class QpaSummaryTest(unittest.TestCase):
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             ledger = json.loads(output.read_text())
+            self.assertEqual(len(ledger["receipts"]), 2)
             case = ledger["cases"]["0"]["KHR-GL33.a"]
             self.assertEqual(case["status"], "Fail")
             self.assertEqual(ledger["timings"], {"KHR-GL33.optional": .002})
             self.assertEqual(ledger["cases"]["0"]["KHR-GL33.optional"]["status"], "NotSupported")
             self.assertTrue(ledger["receipts"][case["receipt"]]["current_binary"])
             self.assertIsNone(ledger["receipts"][case["receipt"]]["post_health"])
+            self.assertEqual({row["requested_surface"] for row in ledger["receipts"].values()},
+                             {"default", "pbuffer"})
+
+    def test_config_inventory_rejects_synthetic_default_without_rewriting_pass(self) -> None:
+        template = ('#beginTestCaseResult CTS-Configs.gl33\n'
+                    '<TestCaseResult><Section Name="Configs">{}</Section>'
+                    '<Section Name="ExcludedConfigs"><Text>EGL(2): Not conformant</Text></Section>'
+                    '<Result StatusCode="Pass"/></TestCaseResult>\n'
+                    '#endTestCaseResult\n#endSession\n')
+        for entries, accepted in (("<Text>EGL(1): window, pbuffer</Text>", True),
+                                  ("<Text>default(0): window</Text>", False),
+                                  ("", False),
+                                  ("<Text>EGL(1): window</Text>" * 2, False),
+                                  ("<Text>EGL(1): unknown</Text>", False)):
+            with self.subTest(entries=entries), tempfile.TemporaryDirectory() as directory:
+                text = template.format(entries)
+                receipt = Path(directory) / "configs.qpa"
+                receipt.write_text(text)
+                result = subprocess.run(["python3", str(PARSER), str(receipt), "--json",
+                                         "--require-egl-configs"], text=True, capture_output=True)
+                summary = json.loads(result.stdout)
+                self.assertEqual(result.returncode, 0 if accepted else 1)
+                self.assertEqual(summary["counts"], {"Pass": 1})
+                self.assertEqual(summary["egl_configs"]["excluded"], ["EGL(2): Not conformant"])
+        for invalid in (template.format("").replace("#endSession", ""),
+                        template.format("").replace('StatusCode="Pass"', 'StatusCode="Fail"'),
+                        template.format("").replace('Name="Configs"', 'Name="Missing"'),
+                        template.format("").replace('</TestCaseResult>', ''),
+                        qpa([("KHR-GL33.info.vendor", "Pass")])):
+            with self.assertRaises(ValueError):
+                SUMMARY["egl_configuration_inventory"](invalid)
 
 
 if __name__ == "__main__":

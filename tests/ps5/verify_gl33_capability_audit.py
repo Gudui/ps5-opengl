@@ -648,8 +648,9 @@ require("PS5_ENABLE_DYNAMIC_COLOR_TARGET_CANDIDATE" in SCREEN and
         "proxy.last_level = 0" in SCREEN and
         "ps5_agc_gate2_set_color_target_extents" in SCREEN and
         "ps5_agc_mrt_attrib2" in BACKEND and
-        "(heights[target] - 1u) | ((widths[target] - 1u) << 14)" in
-        BACKEND and
+        "ps5_agc_color_target_extent(" in BACKEND and
+        "ps5_agc_mrt_pitches[target], ps5_agc_mrt_sizes[target]" in BACKEND and
+        "(height - 1u) | ((encoded_width - 1u) << 14)" in BACKEND and
         "ps5_tiled_rgba8_width(resource)" in SCREEN and
         "TARGET_WIDTH 128" in RTT and "TARGET_HEIGHT 96" in RTT and
         "UPLOAD_HASH UINT32_C(0xc38d1dc5)" in RTT,
@@ -672,7 +673,7 @@ require("templ->bind & PIPE_BIND_DISPLAY_TARGET" in SCREEN and
         "ps5_agc_gate2_set_scanout" in BACKEND and
         "sizes[0] >= PS5_AGC_FRAMEBUFFER_POOL_BYTES" in BACKEND and
         "records[color_base].value = (uint32_t)(address >> 8)" in BACKEND and
-        "ps5_agc_mrt_sizes[target] < required" in BACKEND,
+        "if (size < required)\n      return -1;" in BACKEND,
         "dynamic color allocation or scanout decoupling regressed")
 require("PS5_ENABLE_DEPTH_TEXTURE_CANDIDATE" in SCREEN and
         "PS5_ENABLE_DYNAMIC_DEPTH_TARGET_CANDIDATE" in SCREEN and
@@ -1866,17 +1867,42 @@ require("ps5_depth_render_target" in SCREEN and
 
 require("target == PIPE_TEXTURE_1D_ARRAY" in SCREEN and
         "target == PIPE_TEXTURE_CUBE" in SCREEN and
-        "target == PIPE_TEXTURE_3D" in SCREEN and
+        "target == PIPE_TEXTURE_2D_ARRAY" in SCREEN and
         "ps5_texture_level_layers" in SCREEN and
         "UINT32_C(0xb1800000)" in SCREEN and
-        "UINT32_C(0xa1800000)" in SCREEN and
+        "UINT32_C(0xd1800000)" in SCREEN and
         "egl_public_core33_depth_targets.o:" in MAKEFILE and
         "glFramebufferTexture1D" in DEPTH_TARGETS and
         "GL_TEXTURE_CUBE_MAP_NEGATIVE_Y" in DEPTH_TARGETS and
         "glFramebufferTextureLayer" in DEPTH_TARGETS and
+        "GL_TEXTURE_CUBE_MAP, GL_TEXTURE_2D_ARRAY," in DEPTH_TARGETS and
+        "GL_TEXTURE_3D" not in DEPTH_TARGETS and
+        "GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER" in DEPTH_TARGETS and
+        "target == GL_TEXTURE_1D || target == GL_TEXTURE_1D_ARRAY" in DEPTH_TARGETS and
+        "? 1 : SIZE;" in DEPTH_TARGETS and
+        "glViewport(0, 0, SIZE, height)" in DEPTH_TARGETS and
+        "glReadPixels(SIZE / 2, height / 2, 1, 1" in DEPTH_TARGETS and
+        "layers[4] = {0, 2, 0, 2}" in DEPTH_TARGETS and
+        "attached_layer == (GLint)layer" in DEPTH_TARGETS and
+        "glGetTexImage(target, 0, GL_DEPTH_COMPONENT, GL_FLOAT, array_pixels)" in DEPTH_TARGETS and
+        "index / SIZE == layer ? 0.5f : 0.25f" in DEPTH_TARGETS and
+        "routing_ok &= array_pixels[index] == expected" in DEPTH_TARGETS and
+        "routing_ok && fabsf(*depth - 0.5f)" in DEPTH_TARGETS and
+        "query_discrepancy=%d" in DEPTH_TARGETS and
         "matching == 4" in DEPTH_TARGETS and
         "draw_calls == 4" in DEPTH_TARGETS,
-        "Core 1D/cube/3D depth-target slice routing regressed")
+        "Core depth-target nonzero layers, strict routing, or explicit query limitation regressed")
+
+require("#ifdef PS5_DEPTH_TARGETS_HOST_REFERENCE" in DEPTH_TARGETS and
+        '#define TAG "[host-egl-core33-depth-targets]"' in DEPTH_TARGETS and
+        '#define TAG "[ps5-egl-core33-depth-targets]"' in DEPTH_TARGETS and
+        "#define SURFACE_TYPE EGL_PBUFFER_BIT" in DEPTH_TARGETS and
+        "#define SURFACE_TYPE EGL_WINDOW_BIT" in DEPTH_TARGETS and
+        "eglCreatePbufferSurface" in DEPTH_TARGETS and
+        "eglCreateWindowSurface" in DEPTH_TARGETS and
+        "++host_draw_calls;" in DEPTH_TARGETS and
+        "draw_counter=host-issued" in DEPTH_TARGETS,
+        "Depth-target host reference lost separation from native draw-status proof")
 
 require("ps5_depth_staging_required" in SCREEN and
         "ps5_stage_depth_surface" in SCREEN and
@@ -1886,9 +1912,12 @@ require("ps5_depth_staging_required" in SCREEN and
         "glFramebufferTexture2D" in DEPTH_MIP_TARGET and
         "glFramebufferTextureLayer" in DEPTH_MIP_TARGET and
         "glGetTexImage" in DEPTH_MIP_TARGET and
+        "#define TARGET_COUNT 5" in DEPTH_MIP_TARGET and
+        "rejected_3d = test_invalid_3d_depth();" in DEPTH_MIP_TARGET and
+        "rejected = error == GL_INVALID_OPERATION;" in DEPTH_MIP_TARGET and
         "matching == TARGET_COUNT" in DEPTH_MIP_TARGET and
-        "draw_calls == TARGET_COUNT" in DEPTH_MIP_TARGET,
-        "Core mipmapped Z32 depth-target staging route regressed")
+        "draw_calls == TARGET_COUNT && rejected_3d" in DEPTH_MIP_TARGET,
+        "Core five legal mipmapped Z32 depth targets or mandatory invalid 3D rejection regressed")
 
 require("egl_public_core33_scissored_clear.o:" in MAKEFILE and
         "ps5_clear_bounds" in SCREEN and
@@ -2136,13 +2165,13 @@ require("ps5_tiled_stencil_surface_size_samples" in SCREEN and
         "GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |" in MSAA4_DEPTH,
         "Core 3.3 4x packed depth/stencil candidate route is incomplete")
 
-require("[pss-opengl-cts] finished" in CTS_MAIN and
+require("[ps5-opengl-cts] finished" in CTS_MAIN and
         "sceKernelDebugOutText" in CTS_MAIN and
         "std::fflush(stdout)" in CTS_MAIN and
         'return finish("argument_error", 2)' in CTS_MAIN and
         'return finish("fatal", 3)' in CTS_MAIN and
         'return finish(passed ? "passed" : "failed"' in CTS_MAIN and
-        "ObservationStopText = '[pss-opengl-cts] finished'" in CTS_RUNNER,
+        "ObservationStopText = '[ps5-opengl-cts] finished'" in CTS_RUNNER,
         "native CTS completion-marker observation contract regressed")
 
 require("$cycleArguments.UploadRelativePaths = @(" in CTS_RUNNER and
@@ -2226,7 +2255,7 @@ for override in ("MESA_GL_VERSION_OVERRIDE", "MESA_EXTENSION_OVERRIDE"):
 for heading in (
     "How Mesa computes the version", "Current PS5 Gallium envelope",
     "Mesa version predicates and present blockers",
-    "Gate 7 feature-family inventory", "Immediate acceptance contract",
+    "Feature-family inventory", "Immediate acceptance contract",
 ):
     require(heading in AUDIT, f"capability audit section missing: {heading}")
 
