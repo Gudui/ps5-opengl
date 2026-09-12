@@ -65,6 +65,11 @@ int main(void)
       "void main(){\n"
       "   color=v_color;\n"
       "}\n";
+#elif defined(PS5_NATIVE_SCISSOR)
+   static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
+      "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
+   static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
+      "void main(){color=vec4(0.0,1.0,0.0,1.0);}\n";
 #elif defined(PS5_NATIVE_UNIFORM_MATRIX)
    static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
       "uniform mat4 u_transform;\n"
@@ -187,7 +192,7 @@ int main(void)
    };
    GLuint ebo = 0;
    GLint u_loc = -1;
-#elif defined(PS5_NATIVE_INDEXED_TRIANGLE)
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_SCISSOR)
    /* First three vertices are degenerate: ignoring the EBO cannot pass visually. */
    static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, -0.5f,-0.5f, 0.0f,0.5f};
    static const GLushort indices[] = {0, 1, 3};
@@ -276,7 +281,7 @@ int main(void)
    glClearColor(0, 0, 0, 1);
 #endif
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
@@ -356,10 +361,34 @@ int main(void)
                        src_rgb, dst_rgb, src_a, dst_a, eq_rgb, eq_a);
    }
 #endif
+#ifdef PS5_NATIVE_SCISSOR
+   {
+      GLint sc_x = width / 2;
+      GLint sc_y = 0;
+      GLsizei sc_w = width - sc_x;
+      GLsizei sc_h = height;
+      glEnable(GL_SCISSOR_TEST);
+      CHECK(glIsEnabled(GL_SCISSOR_TEST), "scissor-enable");
+      glScissor(sc_x, sc_y, sc_w, sc_h);
+      CHECK(glGetError() == GL_NO_ERROR, "scissor-setup");
+      GLint box[4] = {0};
+      glGetIntegerv(GL_SCISSOR_BOX, box);
+      CHECK(box[0] == sc_x && box[1] == sc_y && box[2] == (GLint)sc_w && box[3] == (GLint)sc_h &&
+            glGetError() == GL_NO_ERROR, "scissor-query");
+      ps5_native_trace("OGL3_SCISSOR_SETUP_OK x=%d y=%d w=%d h=%d\n", box[0], box[1], box[2], box[3]);
+   }
+#endif
    start = sceKernelGetProcessTime();
    for (frames = 0; frames < 600; ++frames) {
       CHECK(sceKernelGetProcessTime() - start < UINT64_C(30000000), "frame-deadline");
+#if defined(PS5_NATIVE_SCISSOR)
+      glDisable(GL_SCISSOR_TEST);
+#endif
       glClear(GL_COLOR_BUFFER_BIT);
+#if defined(PS5_NATIVE_SCISSOR)
+      glEnable(GL_SCISSOR_TEST);
+      glScissor(width / 2, 0, width - (width / 2), height);
+#endif
 #ifdef PS5_NATIVE_UNIFORM_MATRIX
       glUniformMatrix4fv(u_loc, 1, GL_FALSE, transform_matrix);
 #endif
@@ -370,7 +399,7 @@ int main(void)
       /* Draw translucent foreground triangle with blending enabled */
       glEnable(GL_BLEND);
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(6 * sizeof(GLushort)));
-#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_SCISSOR)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
 #else
       glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -392,6 +421,10 @@ cleanup:
       glDisable(GL_BLEND);
       if (glIsEnabled(GL_BLEND)) cleanup_ok = 0;
 #endif
+#ifdef PS5_NATIVE_SCISSOR
+      glDisable(GL_SCISSOR_TEST);
+      if (glIsEnabled(GL_SCISSOR_TEST)) cleanup_ok = 0;
+#endif
 #ifdef PS5_NATIVE_SAMPLER_STATE
       glBindSampler(0, 0);
       if (sampler) glDeleteSamplers(1, &sampler);
@@ -399,7 +432,7 @@ cleanup:
 #if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
