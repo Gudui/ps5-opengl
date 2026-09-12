@@ -64,8 +64,11 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
     grep -aFq "$(cat "$stage/source-commit.txt")" "$linked"
     nm -u "$linked" | grep -F sceSystemServiceLoadExec >/dev/null
     nm -u "$linked" | grep -F sceKernelDebugOutText >/dev/null
-    if [[ $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o || $gate == egl_public_core33_alpha_blend.o ]]; then
+    if [[ $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o ]]; then
         grep -aFq 'OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0' "$linked"
+        nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
+    elif [[ $gate == egl_public_core33_alpha_blend.o ]]; then
+        grep -aFq 'OGL3_INDEXED_SETUP_OK type=ushort count=9 indices=stripe(6)+triangle(3) offset=0' "$linked"
         nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
     fi
     if [[ $gate == egl_public_core33_uniform_matrix.o ]]; then
