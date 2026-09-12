@@ -14,7 +14,7 @@ title_id=${PS5_NATIVE_TITLE_ID:-PPSA99005}
 title_name=${PS5_NATIVE_TITLE_NAME:-PS5 OpenGL 3.3 Tests}
 [[ $title_id =~ ^PPSA99[0-9]{3}$ ]] || { echo 'Invalid native title ID' >&2; exit 2; }
 [[ -n $title_name && ${#title_name} -le 80 && $title_name != *$'\n'* ]] || exit 2
-build_id=$(git -C "$root" rev-parse HEAD)
+build_id=$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)
 
 
 if [[ $requested_test == --list ]]; then
@@ -82,7 +82,7 @@ boilerplate_commit=$(git -c safe.directory="$template" -C "$template" \
 
 sdk="$template/.deps/native/ps5-payload-sdk"
 if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o ]]; then
-    test -z "$(git -C "$root" status --porcelain)" || { echo 'Triangle requires clean source checkpoint' >&2; exit 2; }
+    test -z "$(git -c safe.directory="$root" -C "$root" status --porcelain)" || { echo 'Triangle requires clean source checkpoint' >&2; exit 2; }
     prefix=$(realpath -m -- "${PS5_OPENGL_PREFIX:-$root/build/sdk/ps5-opengl-core33}")
     (cd "$prefix" && sha256sum --check --strict manifest.sha256 >/dev/null)
     object_dir="$root/build/native-triangle/$title_id"
