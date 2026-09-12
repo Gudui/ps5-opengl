@@ -56,7 +56,7 @@ gate=$(tr -d '\r\n' < "$selected")
     printf 'invalid selected gate: %s\n' "$gate" >&2
     exit 1
 }
-if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o || $gate == egl_public_core33_alpha_blend.o || $gate == egl_public_core33_scissor.o ]]; then
+if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o || $gate == egl_public_core33_alpha_blend.o || $gate == egl_public_core33_scissor.o || $gate == egl_public_core33_depth_cull.o ]]; then
     grep -aFq '[ps5-opengl-native] gate completed status=%d' "$linked"
     for marker in OGL2_MAIN_ENTER OGL2_RUN_COMPLETE OGL2_EGL_TEARDOWN_OK OGL2_EXIT_REQUEST_BEGIN "$title_id"; do
         grep -aFq "$marker" "$linked"
@@ -69,6 +69,9 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
         nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
     elif [[ $gate == egl_public_core33_alpha_blend.o ]]; then
         grep -aFq 'OGL3_INDEXED_SETUP_OK type=ushort count=9 indices=stripe(6)+triangle(3) offset=0' "$linked"
+        nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
+    elif [[ $gate == egl_public_core33_depth_cull.o ]]; then
+        grep -aFq 'OGL3_INDEXED_SETUP_OK type=ushort count=9 indices=3triangles offset=0' "$linked"
         nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
     fi
     if [[ $gate == egl_public_core33_uniform_matrix.o ]]; then
@@ -116,6 +119,19 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
         nm "$linked" | grep -E ' [Tt] glIsEnabled$' >/dev/null
         nm "$linked" | grep -E ' [Tt] glScissor$' >/dev/null
         nm "$linked" | grep -E ' [Tt] glGetIntegerv$' >/dev/null
+    fi
+    if [[ $gate == egl_public_core33_depth_cull.o ]]; then
+        grep -aFq 'OGL3_DEPTH_CULL_SETUP_OK depth_func=0x%x depth_mask=%d cull_mode=0x%x front_face=0x%x' "$linked"
+        nm "$linked" | grep -E ' [Tt] glEnable$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDisable$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glIsEnabled$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDepthFunc$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDepthMask$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glClearDepth$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glCullFace$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glFrontFace$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glGetIntegerv$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glGetBooleanv$' >/dev/null
     fi
     readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
 else

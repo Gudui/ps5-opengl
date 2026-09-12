@@ -65,6 +65,21 @@ int main(void)
       "void main(){\n"
       "   color=v_color;\n"
       "}\n";
+#elif defined(PS5_NATIVE_DEPTH_CULL)
+   static const char *vs = "#version 330 core\n"
+      "layout(location=0) in vec3 position;\n"
+      "layout(location=1) in vec4 in_color;\n"
+      "out vec4 v_color;\n"
+      "void main(){\n"
+      "   gl_Position=vec4(position,1.0);\n"
+      "   v_color=in_color;\n"
+      "}\n";
+   static const char *fs = "#version 330 core\n"
+      "in vec4 v_color;\n"
+      "layout(location=0) out vec4 color;\n"
+      "void main(){\n"
+      "   color=v_color;\n"
+      "}\n";
 #elif defined(PS5_NATIVE_SCISSOR)
    static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
       "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
@@ -197,12 +212,58 @@ int main(void)
    static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, -0.5f,-0.5f, 0.0f,0.5f};
    static const GLushort indices[] = {0, 1, 3};
    GLuint ebo = 0;
+#elif defined(PS5_NATIVE_DEPTH_CULL)
+   /* Vertex structure: {pos.x, pos.y, pos.z, color.r, color.g, color.b, color.a} (stride = 7 floats)
+    * Object 1 (vertices 0..2, indices 0,1,2, CCW):
+    *   Geometry: [-0.5, 0.5], z = 0.0 (near, zw = 0.5).
+    *   Color: Green (0.0, 1.0, 0.0, 1.0) - channel 1 is immune to display R/B swap.
+    *   Drawn FIRST. Writes depth 0.5 to depth buffer.
+    * Object 2 (vertices 3..5, indices 3,4,5, CCW):
+    *   Geometry: [-0.8, 0.8], z = 0.8 (far, zw = 0.9).
+    *   Color: Blue (0.0, 0.0, 1.0, 1.0) -> renders as TV Red.
+    *   Drawn SECOND. Under glDepthFunc(GL_LESS), pixels overlapping Object 1
+    *   fail depth test (0.9 < 0.5 is false) and are discarded. Only outer wings appear.
+    * Object 3 (vertices 6..8, indices 6,7,8, CW):
+    *   Geometry: [-0.5, 0.5], z = -0.5 (in front of Object 1, zw = 0.25).
+    *   Color: White (1.0, 1.0, 1.0, 1.0).
+    *   Drawn THIRD. Winding is CW. Under glCullFace(GL_BACK) + glFrontFace(GL_CCW),
+    *   this triangle must be culled by hardware rasterizer and produce zero fragments.
+    * Clear: Black (0.0, 0.0, 0.0, 1.0), ClearDepth = 1.0.
+    */
+   static const GLfloat vertices[] = {
+      /* Object 1: Near triangle (CCW, Green, z=0.0) */
+      -0.5f, -0.5f,  0.0f,  0.0f, 1.0f, 0.0f, 1.0f,
+       0.5f, -0.5f,  0.0f,  0.0f, 1.0f, 0.0f, 1.0f,
+       0.0f,  0.5f,  0.0f,  0.0f, 1.0f, 0.0f, 1.0f,
+
+      /* Object 2: Far triangle (CCW, Blue/Red, z=0.8) */
+      -0.8f, -0.8f,  0.8f,  0.0f, 0.0f, 1.0f, 1.0f,
+       0.8f, -0.8f,  0.8f,  0.0f, 0.0f, 1.0f, 1.0f,
+       0.0f,  0.8f,  0.8f,  0.0f, 0.0f, 1.0f, 1.0f,
+
+      /* Object 3: Culled triangle (CW, White, z=-0.5) */
+      -0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f, 1.0f,
+       0.0f,  0.5f, -0.5f,  1.0f, 1.0f, 1.0f, 1.0f,
+       0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f, 1.0f
+   };
+   static const GLushort indices[] = {
+      0, 1, 2,
+      3, 4, 5,
+      6, 7, 8
+   };
+   GLuint ebo = 0;
 #else
    static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, 0.0f,0.5f};
 #endif
+#if defined(PS5_NATIVE_DEPTH_CULL)
+   static const EGLint configs[] = {EGL_SURFACE_TYPE,EGL_WINDOW_BIT,
+      EGL_RENDERABLE_TYPE,EGL_OPENGL_BIT,EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,
+      EGL_BLUE_SIZE,8,EGL_ALPHA_SIZE,8,EGL_DEPTH_SIZE,24,EGL_NONE};
+#else
    static const EGLint configs[] = {EGL_SURFACE_TYPE,EGL_WINDOW_BIT,
       EGL_RENDERABLE_TYPE,EGL_OPENGL_BIT,EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,
       EGL_BLUE_SIZE,8,EGL_ALPHA_SIZE,8,EGL_NONE};
+#endif
    static const EGLint contexts[] = {EGL_CONTEXT_MAJOR_VERSION_KHR,3,
       EGL_CONTEXT_MINOR_VERSION_KHR,3,EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
       EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,EGL_NONE};
@@ -269,6 +330,11 @@ int main(void)
    glEnableVertexAttribArray(0);
    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat), (const void *)(2 * sizeof(GLfloat)));
    glEnableVertexAttribArray(1);
+#elif defined(PS5_NATIVE_DEPTH_CULL)
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(GLfloat), (const void *)0);
+   glEnableVertexAttribArray(0);
+   glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7 * sizeof(GLfloat), (const void *)(3 * sizeof(GLfloat)));
+   glEnableVertexAttribArray(1);
 #else
    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
    glEnableVertexAttribArray(0);
@@ -281,13 +347,15 @@ int main(void)
    glClearColor(0, 0, 0, 1);
 #endif
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
    CHECK(ebo && glGetError() == GL_NO_ERROR, "index-setup");
 #ifdef PS5_NATIVE_ALPHA_BLEND
    ps5_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=9 indices=stripe(6)+triangle(3) offset=0");
+#elif defined(PS5_NATIVE_DEPTH_CULL)
+   ps5_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=9 indices=3triangles offset=0");
 #else
    ps5_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0");
 #endif
@@ -378,13 +446,47 @@ int main(void)
       ps5_native_trace("OGL3_SCISSOR_SETUP_OK x=%d y=%d w=%d h=%d\n", box[0], box[1], box[2], box[3]);
    }
 #endif
+#ifdef PS5_NATIVE_DEPTH_CULL
+   {
+      glEnable(GL_DEPTH_TEST);
+      CHECK(glIsEnabled(GL_DEPTH_TEST), "depth-enable");
+      glDepthFunc(GL_LESS);
+      glDepthMask(GL_TRUE);
+      glClearDepth(1.0);
+      CHECK(glGetError() == GL_NO_ERROR, "depth-setup");
+
+      glEnable(GL_CULL_FACE);
+      CHECK(glIsEnabled(GL_CULL_FACE), "cull-enable");
+      glCullFace(GL_BACK);
+      glFrontFace(GL_CCW);
+      CHECK(glGetError() == GL_NO_ERROR, "cull-setup");
+
+      GLint depth_func = 0;
+      GLboolean depth_mask = GL_FALSE;
+      GLint cull_mode = 0;
+      GLint front_face = 0;
+      glGetIntegerv(GL_DEPTH_FUNC, &depth_func);
+      glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+      glGetIntegerv(GL_CULL_FACE_MODE, &cull_mode);
+      glGetIntegerv(GL_FRONT_FACE, &front_face);
+      CHECK(depth_func == GL_LESS && depth_mask == GL_TRUE &&
+            cull_mode == GL_BACK && front_face == GL_CCW &&
+            glGetError() == GL_NO_ERROR, "depth-cull-query");
+      ps5_native_trace("OGL3_DEPTH_CULL_SETUP_OK depth_func=0x%x depth_mask=%d cull_mode=0x%x front_face=0x%x\n",
+                       depth_func, (int)depth_mask, cull_mode, front_face);
+   }
+#endif
    start = sceKernelGetProcessTime();
    for (frames = 0; frames < 600; ++frames) {
       CHECK(sceKernelGetProcessTime() - start < UINT64_C(30000000), "frame-deadline");
 #if defined(PS5_NATIVE_SCISSOR)
       glDisable(GL_SCISSOR_TEST);
 #endif
+#if defined(PS5_NATIVE_DEPTH_CULL)
+      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+#else
       glClear(GL_COLOR_BUFFER_BIT);
+#endif
 #if defined(PS5_NATIVE_SCISSOR)
       glEnable(GL_SCISSOR_TEST);
       glScissor(width / 2, 0, width - (width / 2), height);
@@ -398,6 +500,13 @@ int main(void)
       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, (const void *)0);
       /* Draw translucent foreground triangle with blending enabled */
       glEnable(GL_BLEND);
+      glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(6 * sizeof(GLushort)));
+#elif defined(PS5_NATIVE_DEPTH_CULL)
+      /* Draw Object 1: Near triangle (CCW, Green, z=0.0) -> offset 0 */
+      glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)0);
+      /* Draw Object 2: Far triangle (CCW, Blue/Red, z=0.8) -> offset 3 * sizeof(GLushort) */
+      glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(3 * sizeof(GLushort)));
+      /* Draw Object 3: Culled triangle (CW, White, z=-0.5) -> offset 6 * sizeof(GLushort) */
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(6 * sizeof(GLushort)));
 #elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_SCISSOR)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
@@ -425,6 +534,12 @@ cleanup:
       glDisable(GL_SCISSOR_TEST);
       if (glIsEnabled(GL_SCISSOR_TEST)) cleanup_ok = 0;
 #endif
+#ifdef PS5_NATIVE_DEPTH_CULL
+      glDisable(GL_DEPTH_TEST);
+      if (glIsEnabled(GL_DEPTH_TEST)) cleanup_ok = 0;
+      glDisable(GL_CULL_FACE);
+      if (glIsEnabled(GL_CULL_FACE)) cleanup_ok = 0;
+#endif
 #ifdef PS5_NATIVE_SAMPLER_STATE
       glBindSampler(0, 0);
       if (sampler) glDeleteSamplers(1, &sampler);
@@ -432,7 +547,7 @@ cleanup:
 #if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
