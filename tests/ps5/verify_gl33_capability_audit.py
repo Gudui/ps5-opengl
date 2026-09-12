@@ -2197,7 +2197,10 @@ require("struct pipe_resource *depth_stencil" in EGL and
         "PIPE_BIND_DEPTH_STENCIL" in EGL and
         "case EGL_DEPTH_SIZE: *value = 32" in EGL and
         "case EGL_STENCIL_SIZE: *value = 8" in EGL and
-        "PixelFormat(8, 8, 8, 8), 32, 8, 0" in CTS_PLATFORM and
+        "&glu::RenderConfig::depthBits, 32" in CTS_PLATFORM and
+        "&glu::RenderConfig::stencilBits, 8" in CTS_PLATFORM and
+        "tcu::PixelFormat(red, green, blue, alpha)" in CTS_PLATFORM and
+        "depth, stencil, samples" in CTS_PLATFORM and
         "EGL_DEPTH_SIZE" in CTS_PLATFORM and
         "EGL_STENCIL_SIZE" in CTS_PLATFORM,
         "native CTS/default EGL surface lost depth-stencil backing")
