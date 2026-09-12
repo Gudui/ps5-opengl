@@ -56,7 +56,7 @@ gate=$(tr -d '\r\n' < "$selected")
     printf 'invalid selected gate: %s\n' "$gate" >&2
     exit 1
 }
-if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o ]]; then
+if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o ]]; then
     grep -aFq '[ps5-opengl-native] gate completed status=%d' "$linked"
     for marker in OGL2_MAIN_ENTER OGL2_RUN_COMPLETE OGL2_EGL_TEARDOWN_OK OGL2_EXIT_REQUEST_BEGIN "$title_id"; do
         grep -aFq "$marker" "$linked"
@@ -64,9 +64,14 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
     grep -aFq "$(cat "$stage/source-commit.txt")" "$linked"
     nm -u "$linked" | grep -F sceSystemServiceLoadExec >/dev/null
     nm -u "$linked" | grep -F sceKernelDebugOutText >/dev/null
-    if [[ $gate == egl_public_core33_indexed_triangle.o ]]; then
+    if [[ $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o ]]; then
         grep -aFq 'OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0' "$linked"
         nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
+    fi
+    if [[ $gate == egl_public_core33_uniform_matrix.o ]]; then
+        grep -aFq 'OGL3_UNIFORM_MATRIX_SETUP_OK loc=%d' "$linked"
+        nm "$linked" | grep -E ' [Tt] glGetUniformLocation$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glUniformMatrix4fv$' >/dev/null
     fi
     readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
 else

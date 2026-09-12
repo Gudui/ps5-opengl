@@ -34,11 +34,32 @@ static GLuint compile_shader(GLenum type, const char *source, const char *stage)
 
 int main(void)
 {
+#ifdef PS5_NATIVE_UNIFORM_MATRIX
+   static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
+      "uniform mat4 u_transform;\n"
+      "void main(){gl_Position=u_transform*vec4(position,0.0,1.0);}\n";
+#else
    static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
       "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
+#endif
    static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
       "void main(){color=vec4(1.0,0.0,1.0,1.0);}\n";
-#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+#if defined(PS5_NATIVE_UNIFORM_MATRIX)
+   /* Base vertices are [-1, 1]; uniform 0.5 scale matrix maps to [-0.5, 0.5].
+    * If uniform is unassigned (0.0 in GLSL), vertex positions become (0,0,0,0) (invisible).
+    * If uniform transform is not applied, vertices span [-1, 1] (edge-to-edge).
+    * With uniform matrix applied, rendered triangle matches control centered geometry. */
+   static const GLfloat vertices[] = {-1.0f,-1.0f, 1.0f,-1.0f, -1.0f,-1.0f, 0.0f,1.0f};
+   static const GLushort indices[] = {0, 1, 3};
+   static const GLfloat transform_matrix[16] = {
+      0.5f, 0.0f, 0.0f, 0.0f,
+      0.0f, 0.5f, 0.0f, 0.0f,
+      0.0f, 0.0f, 1.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 1.0f
+   };
+   GLuint ebo = 0;
+   GLint u_loc = -1;
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE)
    /* First three vertices are degenerate: ignoring the EBO cannot pass visually. */
    static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, -0.5f,-0.5f, 0.0f,0.5f};
    static const GLushort indices[] = {0, 1, 3};
@@ -111,18 +132,28 @@ int main(void)
    glViewport(0, 0, width, height);
    glClearColor(0, 0, 0, 1);
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
    CHECK(ebo && glGetError() == GL_NO_ERROR, "index-setup");
    ps5_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0");
 #endif
+#ifdef PS5_NATIVE_UNIFORM_MATRIX
+   u_loc = glGetUniformLocation(program, "u_transform");
+   CHECK(u_loc >= 0 && glGetError() == GL_NO_ERROR, "uniform-location");
+   glUniformMatrix4fv(u_loc, 1, GL_FALSE, transform_matrix);
+   CHECK(glGetError() == GL_NO_ERROR, "uniform-matrix");
+   ps5_native_trace("OGL3_UNIFORM_MATRIX_SETUP_OK loc=%d\n", u_loc);
+#endif
    start = sceKernelGetProcessTime();
    for (frames = 0; frames < 600; ++frames) {
       CHECK(sceKernelGetProcessTime() - start < UINT64_C(30000000), "frame-deadline");
       glClear(GL_COLOR_BUFFER_BIT);
-#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+#ifdef PS5_NATIVE_UNIFORM_MATRIX
+      glUniformMatrix4fv(u_loc, 1, GL_FALSE, transform_matrix);
+#endif
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
 #else
       glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -140,7 +171,7 @@ cleanup:
    if (result) ps5_native_trace("OGL2_FAIL operation=%s egl=0x%x frames=%u\n", operation,
                       eglGetError(), frames);
    if (current) {
-#ifdef PS5_NATIVE_INDEXED_TRIANGLE
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
