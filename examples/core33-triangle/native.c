@@ -34,7 +34,7 @@ static GLuint compile_shader(GLenum type, const char *source, const char *stage)
 
 int main(void)
 {
-#if defined(PS5_NATIVE_TEXTURE_2D)
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
    static const char *vs = "#version 330 core\n"
       "layout(location=0) in vec2 position;\n"
       "layout(location=1) in vec2 texcoord;\n"
@@ -62,7 +62,39 @@ int main(void)
    static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
       "void main(){color=vec4(1.0,0.0,1.0,1.0);}\n";
 #endif
-#if defined(PS5_NATIVE_TEXTURE_2D)
+#if defined(PS5_NATIVE_SAMPLER_STATE)
+   /* Interleaved {pos.x, pos.y, uv.u, uv.v} with extended UV coordinates [0.0, 2.0].
+    * Indices {0, 1, 3} form the centered triangle [-0.5, 0.5] matching control.
+    * Texels are 2x2 RGBA8:
+    * (0,0)=Red (255,0,0,255), (1,0)=Green (0,255,0,255),
+    * (0,1)=Blue (0,0,255,255), (1,1)=Yellow (255,255,0,255).
+    * Texture object retains GL_NEAREST and GL_CLAMP_TO_EDGE (control baseline).
+    * Sampler object overrides with GL_LINEAR and GL_REPEAT.
+    * Single-variable visual oracle:
+    * - Sampler object active: repeating 2x2 pattern with smooth linear color blending
+    *   (repeating red/green pattern along base, repeating vertically toward apex).
+    * - Sampler object ignored (fallback to texture clamp/nearest): clamped edges
+    *   beyond UV=1.0 and blocky nearest pixels.
+    * - Sampler binding failure / shader failure: black / invisible.
+    * - Control fallback: solid purple (refuted). */
+   static const GLfloat vertices[] = {
+      -0.5f, -0.5f,  0.0f, 0.0f,
+       0.5f, -0.5f,  2.0f, 0.0f,
+      -0.5f, -0.5f,  0.0f, 0.0f,
+       0.0f,  0.5f,  1.0f, 2.0f
+   };
+   static const GLushort indices[] = {0, 1, 3};
+   static const uint8_t texels[4][4] = {
+      { 255,   0,   0, 255 }, /* (0,0): Red */
+      {   0, 255,   0, 255 }, /* (1,0): Green */
+      {   0,   0, 255, 255 }, /* (0,1): Blue */
+      { 255, 255,   0, 255 }  /* (1,1): Yellow */
+   };
+   GLuint ebo = 0;
+   GLuint texture = 0;
+   GLuint sampler = 0;
+   GLint u_tex_loc = -1;
+#elif defined(PS5_NATIVE_TEXTURE_2D)
    /* Interleaved {pos.x, pos.y, uv.u, uv.v}.
     * Indices {0, 1, 3} form the centered triangle [-0.5, 0.5] matching control.
     * Texels are 2x2 RGBA8:
@@ -172,7 +204,7 @@ int main(void)
    glGenBuffers(1, &vbo);
    glBindBuffer(GL_ARRAY_BUFFER, vbo);
    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-#if defined(PS5_NATIVE_TEXTURE_2D)
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)0);
    glEnableVertexAttribArray(0);
    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)(2 * sizeof(GLfloat)));
@@ -185,7 +217,7 @@ int main(void)
    glViewport(0, 0, width, height);
    glClearColor(0, 0, 0, 1);
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
@@ -199,7 +231,7 @@ int main(void)
    CHECK(glGetError() == GL_NO_ERROR, "uniform-matrix");
    ps5_native_trace("OGL3_UNIFORM_MATRIX_SETUP_OK loc=%d\n", u_loc);
 #endif
-#ifdef PS5_NATIVE_TEXTURE_2D
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
    glGenTextures(1, &texture);
    CHECK(texture && glGetError() == GL_NO_ERROR, "texture-gen");
    glActiveTexture(GL_TEXTURE0);
@@ -216,6 +248,29 @@ int main(void)
    CHECK(glGetError() == GL_NO_ERROR, "texture-uniform");
    ps5_native_trace("OGL3_TEXTURE_2D_SETUP_OK tex=%u loc=%d\n", texture, u_tex_loc);
 #endif
+#ifdef PS5_NATIVE_SAMPLER_STATE
+   glGenSamplers(1, &sampler);
+   CHECK(sampler && glGetError() == GL_NO_ERROR, "sampler-gen");
+   glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
+   glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_REPEAT);
+   CHECK(glGetError() == GL_NO_ERROR, "sampler-param");
+   glBindSampler(0, sampler);
+   CHECK(glGetError() == GL_NO_ERROR, "sampler-bind");
+   {
+      GLint q_min = 0, q_mag = 0, q_wrap_s = 0, q_wrap_t = 0;
+      glGetSamplerParameteriv(sampler, GL_TEXTURE_MIN_FILTER, &q_min);
+      glGetSamplerParameteriv(sampler, GL_TEXTURE_MAG_FILTER, &q_mag);
+      glGetSamplerParameteriv(sampler, GL_TEXTURE_WRAP_S, &q_wrap_s);
+      glGetSamplerParameteriv(sampler, GL_TEXTURE_WRAP_T, &q_wrap_t);
+      CHECK(q_min == GL_LINEAR && q_mag == GL_LINEAR &&
+            q_wrap_s == GL_REPEAT && q_wrap_t == GL_REPEAT &&
+            glGetError() == GL_NO_ERROR, "sampler-query");
+      ps5_native_trace("OGL3_SAMPLER_SETUP_OK sampler=%u min=0x%x mag=0x%x wrap_s=0x%x wrap_t=0x%x\n",
+                       sampler, q_min, q_mag, q_wrap_s, q_wrap_t);
+   }
+#endif
    start = sceKernelGetProcessTime();
    for (frames = 0; frames < 600; ++frames) {
       CHECK(sceKernelGetProcessTime() - start < UINT64_C(30000000), "frame-deadline");
@@ -223,7 +278,7 @@ int main(void)
 #ifdef PS5_NATIVE_UNIFORM_MATRIX
       glUniformMatrix4fv(u_loc, 1, GL_FALSE, transform_matrix);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
 #else
       glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -241,10 +296,14 @@ cleanup:
    if (result) ps5_native_trace("OGL2_FAIL operation=%s egl=0x%x frames=%u\n", operation,
                       eglGetError(), frames);
    if (current) {
-#ifdef PS5_NATIVE_TEXTURE_2D
+#ifdef PS5_NATIVE_SAMPLER_STATE
+      glBindSampler(0, 0);
+      if (sampler) glDeleteSamplers(1, &sampler);
+#endif
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
