@@ -50,6 +50,11 @@ int main(void)
       "void main(){\n"
       "   color=texture(u_texture,v_texcoord);\n"
       "}\n";
+#elif defined(PS5_NATIVE_ALPHA_BLEND)
+   static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
+      "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
+   static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
+      "void main(){color=vec4(1.0,0.0,0.0,0.5);}\n";
 #elif defined(PS5_NATIVE_UNIFORM_MATRIX)
    static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
       "uniform mat4 u_transform;\n"
@@ -62,7 +67,25 @@ int main(void)
    static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
       "void main(){color=vec4(1.0,0.0,1.0,1.0);}\n";
 #endif
-#if defined(PS5_NATIVE_SAMPLER_STATE)
+#if defined(PS5_NATIVE_ALPHA_BLEND)
+   /* Standard centered triangle [-0.5, 0.5] with indices {0, 1, 3} matching control.
+    * Fragment shader outputs semi-transparent red (1.0, 0.0, 0.0, 0.5).
+    * Clear color is solid blue (0.0, 0.0, 1.0, 1.0).
+    * Blending is configured with GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_FUNC_ADD:
+    * Result = 0.5 * Red(1,0,0) + 0.5 * Blue(0,0,1) = Purple(0.5, 0.0, 0.5).
+    * Single-variable visual oracle:
+    * - Blending active: purple / violet centered triangle on solid blue background.
+    * - Blending disabled/ignored: solid red triangle on blue background.
+    * - Shader / clear failure: black or missing triangle. */
+   static const GLfloat vertices[] = {
+      -0.5f, -0.5f,
+       0.5f, -0.5f,
+      -0.5f, -0.5f,
+       0.0f,  0.5f
+   };
+   static const GLushort indices[] = {0, 1, 3};
+   GLuint ebo = 0;
+#elif defined(PS5_NATIVE_SAMPLER_STATE)
    /* Interleaved {pos.x, pos.y, uv.u, uv.v} with extended UV coordinates [0.0, 2.0].
     * Indices {0, 1, 3} form the centered triangle [-0.5, 0.5] matching control.
     * Texels are 2x2 RGBA8:
@@ -215,9 +238,13 @@ int main(void)
 #endif
    glUseProgram(program);
    glViewport(0, 0, width, height);
+#ifdef PS5_NATIVE_ALPHA_BLEND
+   glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+#else
    glClearColor(0, 0, 0, 1);
+#endif
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
@@ -271,6 +298,28 @@ int main(void)
                        sampler, q_min, q_mag, q_wrap_s, q_wrap_t);
    }
 #endif
+#ifdef PS5_NATIVE_ALPHA_BLEND
+   glEnable(GL_BLEND);
+   CHECK(glIsEnabled(GL_BLEND), "blend-enable");
+   glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+   glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+   CHECK(glGetError() == GL_NO_ERROR, "blend-setup");
+   {
+      GLint src_rgb = 0, dst_rgb = 0, src_a = 0, dst_a = 0, eq_rgb = 0, eq_a = 0;
+      glGetIntegerv(GL_BLEND_SRC_RGB, &src_rgb);
+      glGetIntegerv(GL_BLEND_DST_RGB, &dst_rgb);
+      glGetIntegerv(GL_BLEND_SRC_ALPHA, &src_a);
+      glGetIntegerv(GL_BLEND_DST_ALPHA, &dst_a);
+      glGetIntegerv(GL_BLEND_EQUATION_RGB, &eq_rgb);
+      glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &eq_a);
+      CHECK(src_rgb == GL_SRC_ALPHA && dst_rgb == GL_ONE_MINUS_SRC_ALPHA &&
+            src_a == GL_ONE && dst_a == GL_ONE_MINUS_SRC_ALPHA &&
+            eq_rgb == GL_FUNC_ADD && eq_a == GL_FUNC_ADD &&
+            glGetError() == GL_NO_ERROR, "blend-query");
+      ps5_native_trace("OGL3_ALPHA_BLEND_SETUP_OK src_rgb=0x%x dst_rgb=0x%x src_a=0x%x dst_a=0x%x eq_rgb=0x%x eq_a=0x%x\n",
+                       src_rgb, dst_rgb, src_a, dst_a, eq_rgb, eq_a);
+   }
+#endif
    start = sceKernelGetProcessTime();
    for (frames = 0; frames < 600; ++frames) {
       CHECK(sceKernelGetProcessTime() - start < UINT64_C(30000000), "frame-deadline");
@@ -278,7 +327,7 @@ int main(void)
 #ifdef PS5_NATIVE_UNIFORM_MATRIX
       glUniformMatrix4fv(u_loc, 1, GL_FALSE, transform_matrix);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
 #else
       glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -296,6 +345,10 @@ cleanup:
    if (result) ps5_native_trace("OGL2_FAIL operation=%s egl=0x%x frames=%u\n", operation,
                       eglGetError(), frames);
    if (current) {
+#ifdef PS5_NATIVE_ALPHA_BLEND
+      glDisable(GL_BLEND);
+      if (glIsEnabled(GL_BLEND)) cleanup_ok = 0;
+#endif
 #ifdef PS5_NATIVE_SAMPLER_STATE
       glBindSampler(0, 0);
       if (sampler) glDeleteSamplers(1, &sampler);
@@ -303,7 +356,7 @@ cleanup:
 #if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);

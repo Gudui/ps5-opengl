@@ -18,13 +18,16 @@ build_id=$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)
 
 
 if [[ $requested_test == --list ]]; then
-    printf 'egl_public_core33_sampler_state.o\negl_public_core33_texture_2d.o\negl_public_core33_uniform_matrix.o\negl_public_core33_indexed_triangle.o\negl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
+    printf 'egl_public_core33_alpha_blend.o\negl_public_core33_sampler_state.o\negl_public_core33_texture_2d.o\negl_public_core33_uniform_matrix.o\negl_public_core33_indexed_triangle.o\negl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o' "$root/tests/ps5/Makefile" |
         sort -u
     exit 0
 fi
 
 case "$requested_test" in
+    core33-alpha-blend)
+        gate_object=egl_public_core33_alpha_blend.o
+        ;;
     core33-sampler-state)
         gate_object=egl_public_core33_sampler_state.o
         ;;
@@ -56,12 +59,12 @@ case "$requested_test" in
         gate_object=$requested_test.o
         ;;
     *)
-        printf 'usage: %s {--list|core33-sampler-state|core33-texture-2d|core33-uniform-matrix|core33-texture-rectangle|core33-texture-rgtc|core33-depth-texture|egl_public_<gate>[.o]}\n' "$0" >&2
+        printf 'usage: %s {--list|core33-alpha-blend|core33-sampler-state|core33-texture-2d|core33-uniform-matrix|core33-texture-rectangle|core33-texture-rgtc|core33-depth-texture|egl_public_<gate>[.o]}\n' "$0" >&2
         exit 2
         ;;
 esac
 
-[[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o ]] || [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
+[[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o ]] || [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o:' "$root/tests/ps5/Makefile"
 ) || {
     printf 'unknown public OpenGL test object: %s\n' "$gate_object" >&2
@@ -90,7 +93,7 @@ boilerplate_commit=$(git -c safe.directory="$template" -C "$template" \
     rev-parse HEAD)
 
 sdk="$template/.deps/native/ps5-payload-sdk"
-if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o ]]; then
+if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o ]]; then
     test -z "$(git -c safe.directory="$root" -C "$root" status --porcelain)" || { echo 'Triangle requires clean source checkpoint' >&2; exit 2; }
     prefix=$(realpath -m -- "${PS5_OPENGL_PREFIX:-$root/build/sdk/ps5-opengl-core33}")
     (cd "$prefix" && sha256sum --check --strict manifest.sha256 >/dev/null)
@@ -106,6 +109,8 @@ if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public
         triangle_defines=(-DPS5_NATIVE_TEXTURE_2D=1)
     elif [[ $gate_object == egl_public_core33_sampler_state.o ]]; then
         triangle_defines=(-DPS5_NATIVE_SAMPLER_STATE=1)
+    elif [[ $gate_object == egl_public_core33_alpha_blend.o ]]; then
+        triangle_defines=(-DPS5_NATIVE_ALPHA_BLEND=1)
     fi
     PS5_PAYLOAD_SDK="$sdk" sh "$template/tooling/prospero-clang18" \
         "${triangle_defines[@]}" -std=c11 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
@@ -232,7 +237,7 @@ python3 "$root/tools/native-display-metadata.py" "$app/sce_sys/param.json" --fps
 group="$app/vendor/libps5_opengl_group.a"
 {
     printf 'SEARCH_DIR("%s")\n' "$sdk/target/lib"
-    if [[ $gate_object == egl_public_core33_imgui*.o || $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o ]]; then
+    if [[ $gate_object == egl_public_core33_imgui*.o || $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o ]]; then
         printf 'SEARCH_DIR("%s")\n' "$prefix/lib"
     fi
     printf 'EXTERN(ps5_agc_gate2_run)\n'
@@ -243,7 +248,7 @@ group="$app/vendor/libps5_opengl_group.a"
 } > "$group"
 printf 'APP_INCLUDE_PATHS = include\nAPP_STATIC_ARCHIVES = vendor/libps5_opengl_group.a\n' \
     > "$app/.env"
-if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o ]]; then
+if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o ]]; then
     printf 'APP_DEFINITIONS = PS5_NATIVE_BOUNDED_TRIANGLE=1\n' >> "$app/.env"
 fi
 printf '%s\n' "$title_id" > "$app/title-id.txt"

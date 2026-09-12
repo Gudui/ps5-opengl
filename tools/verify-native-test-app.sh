@@ -97,6 +97,15 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
         nm "$linked" | grep -E ' [Tt] glGetUniformLocation$' >/dev/null
         nm "$linked" | grep -E ' [Tt] glUniform1i$' >/dev/null
     fi
+    if [[ $gate == egl_public_core33_alpha_blend.o ]]; then
+        grep -aFq 'OGL3_ALPHA_BLEND_SETUP_OK src_rgb=0x%x dst_rgb=0x%x src_a=0x%x dst_a=0x%x eq_rgb=0x%x eq_a=0x%x' "$linked"
+        nm "$linked" | grep -E ' [Tt] glEnable$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDisable$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glIsEnabled$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glBlendFuncSeparate$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glBlendEquationSeparate$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glGetIntegerv$' >/dev/null
+    fi
     readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
 else
     grep -aFq '[ps5-opengl-native] gate completed status=%d' "$linked"
