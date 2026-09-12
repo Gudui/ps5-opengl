@@ -11,10 +11,10 @@
 extern int sceKernelDebugOutText(int device, const char *text);
 
 /* Diagnostics never retry, allocate, or decide application success/exit. */
-static inline int pss_native_trace(const char *format, ...)
+static inline int ps5_native_trace(const char *format, ...)
     __attribute__((format(printf, 1, 2)));
 
-static inline int pss_native_trace(const char *format, ...) {
+static inline int ps5_native_trace(const char *format, ...) {
   char text[1024];
   va_list args;
   va_start(args, format);
@@ -22,8 +22,8 @@ static inline int pss_native_trace(const char *format, ...) {
   int length = vsnprintf(text, sizeof(text) - 1, format, args);
   va_end(args);
   if (length < 0) {
-    memcpy(text, "[pss-opengl-native] diagnostic-format-error\n",
-           sizeof("[pss-opengl-native] diagnostic-format-error\n"));
+    memcpy(text, "[ps5-opengl-native] diagnostic-format-error\n",
+           sizeof("[ps5-opengl-native] diagnostic-format-error\n"));
   } else if ((size_t)length >= sizeof(text) - 1) {
     static const char suffix[] = " [truncated]\n";
     memcpy(text + sizeof(text) - sizeof(suffix), suffix, sizeof(suffix));

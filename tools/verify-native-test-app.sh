@@ -57,7 +57,7 @@ gate=$(tr -d '\r\n' < "$selected")
     exit 1
 }
 if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o ]]; then
-    grep -aFq '[pss-opengl-native] gate completed status=%d' "$linked"
+    grep -aFq '[ps5-opengl-native] gate completed status=%d' "$linked"
     for marker in OGL2_MAIN_ENTER OGL2_RUN_COMPLETE OGL2_EGL_TEARDOWN_OK OGL2_EXIT_REQUEST_BEGIN "$title_id"; do
         grep -aFq "$marker" "$linked"
     done

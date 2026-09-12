@@ -47,24 +47,24 @@ int sceKernelDebugOutText(int device, const char *text) {
     return -42;
 }
 int main(void) {
-    assert(pss_native_trace("OGL2_FRAME_COMPLETE frame=%u", 600u) == -42);
+    assert(ps5_native_trace("OGL2_FRAME_COMPLETE frame=%u", 600u) == -42);
     assert(strcmp(captured, "OGL2_FRAME_COMPLETE frame=600\n") == 0);
-    pss_native_trace("%s", "already\n");
+    ps5_native_trace("%s", "already\n");
     assert(strcmp(captured, "already\n") == 0);
-    pss_native_trace("%s", "");
+    ps5_native_trace("%s", "");
     assert(strcmp(captured, "\n") == 0);
     char long_text[2048];
     memset(long_text, 'x', sizeof(long_text)-1);
     long_text[sizeof(long_text)-1] = 0;
-    pss_native_trace("%s", long_text);
+    ps5_native_trace("%s", long_text);
     assert(strlen(captured) == 1023);
     assert(strcmp(captured + 1023 - strlen(" [truncated]\n"), " [truncated]\n") == 0);
     long_text[1022] = 0;
-    pss_native_trace("%s", long_text);
+    ps5_native_trace("%s", long_text);
     assert(strlen(captured) == 1023 && captured[1021] == 'x');
     fail_format = 1;
-    pss_native_trace("%s", "unused");
-    assert(strcmp(captured, "[pss-opengl-native] diagnostic-format-error\n") == 0);
+    ps5_native_trace("%s", "unused");
+    assert(strcmp(captured, "[ps5-opengl-native] diagnostic-format-error\n") == 0);
     assert(calls == 6);
     return 0;
 }

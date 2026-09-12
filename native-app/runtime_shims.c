@@ -33,16 +33,16 @@ __attribute__((constructor)) static void ps5_opengl_open_log(void) {
 
 __attribute__((noreturn)) void catchReturnFromMain(int status) {
 #ifdef PS5_NATIVE_BOUNDED_TRIANGLE
-  pss_native_trace("[pss-opengl-native] gate completed status=%d\n", status);
+  ps5_native_trace("[ps5-opengl-native] gate completed status=%d\n", status);
 #else
   printf("[ps5-opengl-native] gate completed status=%d\n", status);
 #endif
   fflush(NULL);
 #ifdef PS5_NATIVE_BOUNDED_TRIANGLE
   extern int sceSystemServiceLoadExec(const char *, const char *const *);
-  pss_native_trace("OGL2_EXIT_REQUEST_BEGIN");
+  ps5_native_trace("OGL2_EXIT_REQUEST_BEGIN");
   int exit_result = sceSystemServiceLoadExec("exit", NULL);
-  pss_native_trace("OGL2_FAIL operation=exit-request result=0x%x status=%d\n", exit_result, status);
+  ps5_native_trace("OGL2_FAIL operation=exit-request result=0x%x status=%d\n", exit_result, status);
   fflush(NULL);
 #endif
   for (;;)
