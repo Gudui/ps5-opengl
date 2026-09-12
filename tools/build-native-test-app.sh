@@ -18,13 +18,16 @@ build_id=$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)
 
 
 if [[ $requested_test == --list ]]; then
-    printf 'egl_public_core33_depth_cull.o\negl_public_core33_scissor.o\negl_public_core33_alpha_blend.o\negl_public_core33_sampler_state.o\negl_public_core33_texture_2d.o\negl_public_core33_uniform_matrix.o\negl_public_core33_indexed_triangle.o\negl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
+    printf 'egl_public_core33_dynamic_buffer.o\negl_public_core33_depth_cull.o\negl_public_core33_scissor.o\negl_public_core33_alpha_blend.o\negl_public_core33_sampler_state.o\negl_public_core33_texture_2d.o\negl_public_core33_uniform_matrix.o\negl_public_core33_indexed_triangle.o\negl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o' "$root/tests/ps5/Makefile" |
         sort -u
     exit 0
 fi
 
 case "$requested_test" in
+    core33-dynamic-buffer)
+        gate_object=egl_public_core33_dynamic_buffer.o
+        ;;
     core33-depth-cull)
         gate_object=egl_public_core33_depth_cull.o
         ;;
@@ -65,12 +68,12 @@ case "$requested_test" in
         gate_object=$requested_test.o
         ;;
     *)
-        printf 'usage: %s {--list|core33-depth-cull|core33-scissor|core33-alpha-blend|core33-sampler-state|core33-texture-2d|core33-uniform-matrix|core33-texture-rectangle|core33-texture-rgtc|core33-depth-texture|egl_public_<gate>[.o]}\n' "$0" >&2
+        printf 'usage: %s {--list|core33-dynamic-buffer|core33-depth-cull|core33-scissor|core33-alpha-blend|core33-sampler-state|core33-texture-2d|core33-uniform-matrix|core33-texture-rectangle|core33-texture-rgtc|core33-depth-texture|egl_public_<gate>[.o]}\n' "$0" >&2
         exit 2
         ;;
 esac
 
-[[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o || $gate_object == egl_public_core33_scissor.o || $gate_object == egl_public_core33_depth_cull.o ]] || [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
+[[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o || $gate_object == egl_public_core33_scissor.o || $gate_object == egl_public_core33_depth_cull.o || $gate_object == egl_public_core33_dynamic_buffer.o ]] || [[ $gate_object =~ ^egl_public_core33_(imgui(_tv|_lifecycle|_benchmark)?|nanovg|sokol(_cube)?)\.o$ ]] || grep -qxF "${gate_object}:" < <(
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o:' "$root/tests/ps5/Makefile"
 ) || {
     printf 'unknown public OpenGL test object: %s\n' "$gate_object" >&2
@@ -121,6 +124,8 @@ if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public
         triangle_defines=(-DPS5_NATIVE_SCISSOR=1)
     elif [[ $gate_object == egl_public_core33_depth_cull.o ]]; then
         triangle_defines=(-DPS5_NATIVE_DEPTH_CULL=1)
+    elif [[ $gate_object == egl_public_core33_dynamic_buffer.o ]]; then
+        triangle_defines=(-DPS5_NATIVE_DYNAMIC_BUFFER=1)
     fi
     PS5_PAYLOAD_SDK="$sdk" sh "$template/tooling/prospero-clang18" \
         "${triangle_defines[@]}" -std=c11 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \

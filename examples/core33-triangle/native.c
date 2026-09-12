@@ -85,6 +85,11 @@ int main(void)
       "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
    static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
       "void main(){color=vec4(0.0,1.0,0.0,1.0);}\n";
+#elif defined(PS5_NATIVE_DYNAMIC_BUFFER)
+   static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
+      "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
+   static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
+      "void main(){color=vec4(0.0,1.0,0.0,1.0);}\n";
 #elif defined(PS5_NATIVE_UNIFORM_MATRIX)
    static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
       "uniform mat4 u_transform;\n"
@@ -207,7 +212,7 @@ int main(void)
    };
    GLuint ebo = 0;
    GLint u_loc = -1;
-#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_SCISSOR)
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
    /* First three vertices are degenerate: ignoring the EBO cannot pass visually. */
    static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, -0.5f,-0.5f, 0.0f,0.5f};
    static const GLushort indices[] = {0, 1, 3};
@@ -319,7 +324,21 @@ int main(void)
    glBindVertexArray(vao);
    glGenBuffers(1, &vbo);
    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+#ifdef PS5_NATIVE_DYNAMIC_BUFFER
+   glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), NULL, GL_STREAM_DRAW);
+   {
+      GLint buf_size = 0, buf_usage = 0;
+      glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &buf_size);
+      glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_USAGE, &buf_usage);
+      CHECK(buf_size == (GLint)sizeof(vertices) && buf_usage == GL_STREAM_DRAW &&
+            glGetError() == GL_NO_ERROR, "dynamic-buffer-param");
+      glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+      CHECK(glGetError() == GL_NO_ERROR, "dynamic-buffer-subdata");
+      ps5_native_trace("OGL3_DYNAMIC_BUFFER_SETUP_OK size=%d usage=0x%x\n", buf_size, buf_usage);
+   }
+#else
    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+#endif
 #if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)0);
    glEnableVertexAttribArray(0);
@@ -347,7 +366,7 @@ int main(void)
    glClearColor(0, 0, 0, 1);
 #endif
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
@@ -494,6 +513,22 @@ int main(void)
 #ifdef PS5_NATIVE_UNIFORM_MATRIX
       glUniformMatrix4fv(u_loc, 1, GL_FALSE, transform_matrix);
 #endif
+#ifdef PS5_NATIVE_DYNAMIC_BUFFER
+      int cycle_frame = frames % 120;
+      float t = (cycle_frame < 60) ? ((float)cycle_frame / 60.0f) : ((float)(120 - cycle_frame) / 60.0f);
+      float dx = -0.35f + 0.70f * t;
+      GLfloat dynamic_vertices[] = {
+         -0.5f + dx, -0.5f,
+          0.5f + dx, -0.5f,
+         -0.5f + dx, -0.5f,
+          0.0f + dx,  0.5f
+      };
+      if (frames < 300) {
+         /* First 300 frames: test buffer orphaning before subdata (MonoGame Discard path) */
+         glBufferData(GL_ARRAY_BUFFER, sizeof(dynamic_vertices), NULL, GL_STREAM_DRAW);
+      }
+      glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(dynamic_vertices), dynamic_vertices);
+#endif
 #if defined(PS5_NATIVE_ALPHA_BLEND)
       /* Draw opaque background stripe first with blending disabled */
       glDisable(GL_BLEND);
@@ -508,7 +543,7 @@ int main(void)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(3 * sizeof(GLushort)));
       /* Draw Object 3: Culled triangle (CW, White, z=-0.5) -> offset 6 * sizeof(GLushort) */
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(6 * sizeof(GLushort)));
-#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_SCISSOR)
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
 #else
       glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -547,7 +582,7 @@ cleanup:
 #if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
