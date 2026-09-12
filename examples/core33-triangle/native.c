@@ -51,10 +51,20 @@ int main(void)
       "   color=texture(u_texture,v_texcoord);\n"
       "}\n";
 #elif defined(PS5_NATIVE_ALPHA_BLEND)
-   static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
-      "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
-   static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
-      "void main(){color=vec4(1.0,0.0,0.0,0.5);}\n";
+   static const char *vs = "#version 330 core\n"
+      "layout(location=0) in vec2 position;\n"
+      "layout(location=1) in vec4 in_color;\n"
+      "out vec4 v_color;\n"
+      "void main(){\n"
+      "   gl_Position=vec4(position,0.0,1.0);\n"
+      "   v_color=in_color;\n"
+      "}\n";
+   static const char *fs = "#version 330 core\n"
+      "in vec4 v_color;\n"
+      "layout(location=0) out vec4 color;\n"
+      "void main(){\n"
+      "   color=v_color;\n"
+      "}\n";
 #elif defined(PS5_NATIVE_UNIFORM_MATRIX)
    static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
       "uniform mat4 u_transform;\n"
@@ -68,22 +78,39 @@ int main(void)
       "void main(){color=vec4(1.0,0.0,1.0,1.0);}\n";
 #endif
 #if defined(PS5_NATIVE_ALPHA_BLEND)
-   /* Standard centered triangle [-0.5, 0.5] with indices {0, 1, 3} matching control.
-    * Fragment shader outputs semi-transparent red (1.0, 0.0, 0.0, 0.5).
-    * Clear color is solid blue (0.0, 0.0, 1.0, 1.0).
-    * Blending is configured with GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_FUNC_ADD:
-    * Result = 0.5 * Red(1,0,0) + 0.5 * Blue(0,0,1) = Purple(0.5, 0.0, 0.5).
-    * Single-variable visual oracle:
-    * - Blending active: purple / violet centered triangle on solid blue background.
-    * - Blending disabled/ignored: solid red triangle on blue background.
-    * - Shader / clear failure: black or missing triangle. */
+   /* Vertex structure: {pos.x, pos.y, color.r, color.g, color.b, color.a}
+    * Object 1 (vertices 0..3): Background vertical stripe x in [-0.2, 0.2], y in [-0.8, 0.8].
+    *   Color: Green (0.0, 1.0, 0.0, 1.0) - channel 1 is immune to display R/B swap.
+    * Object 2 (vertices 4..6): Foreground translucent triangle x in [-0.6, 0.6], y in [-0.4, 0.6].
+    *   Color: GL Blue (0.0, 0.0, 1.0, 0.5) -> renders as TV Red with 50% alpha.
+    * Clear color: GL Red (1.0, 0.0, 0.0, 1.0) -> renders as TV Blue.
+    * Blending: GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA.
+    * Visual oracle:
+    * - Translucent blending active:
+    *     Background: Solid Blue.
+    *     Stripe: Solid Green outside the triangle.
+    *     Triangle wings: Purple / Violet (50% TV Red + 50% TV Blue).
+    *     Triangle center: Olive / Amber (50% TV Red + 50% TV Green).
+    *     Crucially: The green stripe is visibly seen shining right through the center
+    *     of the triangle, rather than being occluded.
+    * - Blending disabled / opaque:
+    *     The triangle renders solid Red, completely blocking the stripe and cutting it in two.
+    */
    static const GLfloat vertices[] = {
-      -0.5f, -0.5f,
-       0.5f, -0.5f,
-      -0.5f, -0.5f,
-       0.0f,  0.5f
+      /* Stripe (quad: 4 vertices) */
+      -0.2f, -0.8f,  0.0f, 1.0f, 0.0f, 1.0f,
+       0.2f, -0.8f,  0.0f, 1.0f, 0.0f, 1.0f,
+       0.2f,  0.8f,  0.0f, 1.0f, 0.0f, 1.0f,
+      -0.2f,  0.8f,  0.0f, 1.0f, 0.0f, 1.0f,
+      /* Translucent triangle (3 vertices) */
+      -0.6f, -0.4f,  0.0f, 0.0f, 1.0f, 0.5f,
+       0.6f, -0.4f,  0.0f, 0.0f, 1.0f, 0.5f,
+       0.0f,  0.6f,  0.0f, 0.0f, 1.0f, 0.5f
    };
-   static const GLushort indices[] = {0, 1, 3};
+   static const GLushort indices[] = {
+      0, 1, 2,  0, 2, 3,
+      4, 5, 6
+   };
    GLuint ebo = 0;
 #elif defined(PS5_NATIVE_SAMPLER_STATE)
    /* Interleaved {pos.x, pos.y, uv.u, uv.v} with extended UV coordinates [0.0, 2.0].
@@ -232,6 +259,11 @@ int main(void)
    glEnableVertexAttribArray(0);
    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)(2 * sizeof(GLfloat)));
    glEnableVertexAttribArray(1);
+#elif defined(PS5_NATIVE_ALPHA_BLEND)
+   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat), (const void *)0);
+   glEnableVertexAttribArray(0);
+   glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat), (const void *)(2 * sizeof(GLfloat)));
+   glEnableVertexAttribArray(1);
 #else
    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
    glEnableVertexAttribArray(0);
@@ -239,7 +271,7 @@ int main(void)
    glUseProgram(program);
    glViewport(0, 0, width, height);
 #ifdef PS5_NATIVE_ALPHA_BLEND
-   glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+   glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
 #else
    glClearColor(0, 0, 0, 1);
 #endif
@@ -249,7 +281,11 @@ int main(void)
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
    CHECK(ebo && glGetError() == GL_NO_ERROR, "index-setup");
+#ifdef PS5_NATIVE_ALPHA_BLEND
+   ps5_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=9 indices=stripe(6)+triangle(3) offset=0");
+#else
    ps5_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0");
+#endif
 #endif
 #ifdef PS5_NATIVE_UNIFORM_MATRIX
    u_loc = glGetUniformLocation(program, "u_transform");
@@ -327,7 +363,14 @@ int main(void)
 #ifdef PS5_NATIVE_UNIFORM_MATRIX
       glUniformMatrix4fv(u_loc, 1, GL_FALSE, transform_matrix);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND)
+#if defined(PS5_NATIVE_ALPHA_BLEND)
+      /* Draw opaque background stripe first with blending disabled */
+      glDisable(GL_BLEND);
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, (const void *)0);
+      /* Draw translucent foreground triangle with blending enabled */
+      glEnable(GL_BLEND);
+      glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(6 * sizeof(GLushort)));
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
 #else
       glDrawArrays(GL_TRIANGLES, 0, 3);
