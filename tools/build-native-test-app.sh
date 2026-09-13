@@ -18,7 +18,7 @@ build_id=$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)
 
 
 if [[ $requested_test == --list ]]; then
-    printf 'egl_public_core33_fbo.o\negl_public_core33_dynamic_texture.o\negl_public_core33_dynamic_buffer.o\negl_public_core33_depth_cull.o\negl_public_core33_scissor.o\negl_public_core33_alpha_blend.o\negl_public_core33_sampler_state.o\negl_public_core33_texture_2d.o\negl_public_core33_uniform_matrix.o\negl_public_core33_indexed_triangle.o\negl_public_core33_triangle.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
+    printf 'egl_public_core33_fbo.o\negl_public_core33_dynamic_texture.o\negl_public_core33_dynamic_buffer.o\negl_public_core33_depth_cull.o\negl_public_core33_scissor.o\negl_public_core33_alpha_blend.o\negl_public_core33_sampler_state.o\negl_public_core33_texture_2d.o\negl_public_core33_uniform_matrix.o\negl_public_core33_indexed_triangle.o\negl_public_core33_triangle.o\negl_public_core33_texture_rectangle.o\negl_public_core33_texture_rgtc.o\negl_public_core33_depth_texture.o\negl_public_core33_resource_cycles.o\negl_public_core33_imgui.o\negl_public_core33_imgui_tv.o\negl_public_core33_imgui_benchmark.o\negl_public_core33_imgui_lifecycle.o\negl_public_core33_nanovg.o\negl_public_core33_sokol.o\negl_public_core33_sokol_cube.o\n'
     grep -oE '^egl_public_[A-Za-z0-9_]+\.o' "$root/tests/ps5/Makefile" |
         sort -u
     exit 0
@@ -67,6 +67,9 @@ case "$requested_test" in
     core33-depth-texture)
         gate_object=egl_public_core33_depth_texture.o
         ;;
+    core33-resource-cycles)
+        gate_object=egl_public_core33_resource_cycles.o
+        ;;
     egl_public_*.o)
         gate_object=$requested_test
         ;;
@@ -74,7 +77,7 @@ case "$requested_test" in
         gate_object=$requested_test.o
         ;;
     *)
-        printf 'usage: %s {--list|core33-fbo|core33-dynamic-texture|core33-dynamic-buffer|core33-depth-cull|core33-scissor|core33-alpha-blend|core33-sampler-state|core33-texture-2d|core33-uniform-matrix|core33-texture-rectangle|core33-texture-rgtc|core33-depth-texture|egl_public_<gate>[.o]}\n' "$0" >&2
+        printf 'usage: %s {--list|core33-fbo|core33-dynamic-texture|core33-dynamic-buffer|core33-depth-cull|core33-scissor|core33-alpha-blend|core33-sampler-state|core33-texture-2d|core33-uniform-matrix|core33-texture-rectangle|core33-texture-rgtc|core33-depth-texture|core33-resource-cycles|egl_public_<gate>[.o]}\n' "$0" >&2
         exit 2
         ;;
 esac
