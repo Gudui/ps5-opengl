@@ -34,7 +34,7 @@ static GLuint compile_shader(GLenum type, const char *source, const char *stage)
 
 int main(void)
 {
-#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
    static const char *vs = "#version 330 core\n"
       "layout(location=0) in vec2 position;\n"
       "layout(location=1) in vec2 texcoord;\n"
@@ -197,6 +197,36 @@ int main(void)
    GLuint ebo = 0;
    GLuint texture = 0;
    GLint u_tex_loc = -1;
+#elif defined(PS5_NATIVE_DYNAMIC_TEXTURE)
+   /* Interleaved {pos.x, pos.y, uv.u, uv.v}.
+    * Indices {0, 1, 3} form the centered triangle [-0.5, 0.5] matching control.
+    * Base texture is 2x2 RGBA8:
+    * Texel (0,0) and (1,0) (bottom row): solid bright Green {0, 255, 0, 255}.
+    * Texel (0,1) and (1,1) (top row): initial Black {0, 0, 0, 255}.
+    * Single-variable visual oracle:
+    * - Dynamic subdata streaming works:
+    *   Phase 1 (frames 0-299): partial 2x1 subregion update (top apex row) pulses in Green
+    *   while the base stays solid green (5 full 2-second cycles).
+    *   Phase 2 (frames 300-599): full 2x2 texture update pulses the entire triangle in Green
+    *   in unison (5 full 2-second cycles).
+    * - glTexSubImage2D fails / ignored: top apex stays black (partial triangle), never pulses.
+    * - Background: solid Black. */
+   static const GLfloat vertices[] = {
+      -0.5f, -0.5f,  0.0f, 0.0f,
+       0.5f, -0.5f,  1.0f, 0.0f,
+      -0.5f, -0.5f,  0.0f, 0.0f,
+       0.0f,  0.5f,  0.5f, 1.0f
+   };
+   static const GLushort indices[] = {0, 1, 3};
+   static const uint8_t initial_texels[4][4] = {
+      {   0, 255,   0, 255 }, /* (0,0): Green base left */
+      {   0, 255,   0, 255 }, /* (1,0): Green base right */
+      {   0,   0,   0, 255 }, /* (0,1): Black top left */
+      {   0,   0,   0, 255 }  /* (1,1): Black top right */
+   };
+   GLuint ebo = 0;
+   GLuint texture = 0;
+   GLint u_tex_loc = -1;
 #elif defined(PS5_NATIVE_UNIFORM_MATRIX)
    /* Base vertices are [-1, 1]; uniform 0.5 scale matrix maps to [-0.5, 0.5].
     * If uniform is unassigned (0.0 in GLSL), vertex positions become (0,0,0,0) (invisible).
@@ -339,7 +369,7 @@ int main(void)
 #else
    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 #endif
-#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)0);
    glEnableVertexAttribArray(0);
    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)(2 * sizeof(GLfloat)));
@@ -366,7 +396,7 @@ int main(void)
    glClearColor(0, 0, 0, 1);
 #endif
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
@@ -402,6 +432,41 @@ int main(void)
    glUniform1i(u_tex_loc, 0);
    CHECK(glGetError() == GL_NO_ERROR, "texture-uniform");
    ps5_native_trace("OGL3_TEXTURE_2D_SETUP_OK tex=%u loc=%d\n", texture, u_tex_loc);
+#endif
+#ifdef PS5_NATIVE_DYNAMIC_TEXTURE
+   glGenTextures(1, &texture);
+   CHECK(texture && glGetError() == GL_NO_ERROR, "texture-gen");
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_2D, texture);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+   CHECK(glGetError() == GL_NO_ERROR, "texture-param");
+   {
+      GLint q_min = 0, q_mag = 0, q_wrap_s = 0, q_wrap_t = 0;
+      glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &q_min);
+      glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &q_mag);
+      glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &q_wrap_s);
+      glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &q_wrap_t);
+      CHECK(q_min == GL_NEAREST && q_mag == GL_NEAREST &&
+            q_wrap_s == GL_CLAMP_TO_EDGE && q_wrap_t == GL_CLAMP_TO_EDGE &&
+            glGetError() == GL_NO_ERROR, "dynamic-texture-param");
+      static const uint8_t black_texels[4][4] = {
+         { 0, 0, 0, 255 }, { 0, 0, 0, 255 },
+         { 0, 0, 0, 255 }, { 0, 0, 0, 255 }
+      };
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, black_texels);
+      CHECK(glGetError() == GL_NO_ERROR, "texture-upload");
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, initial_texels);
+      CHECK(glGetError() == GL_NO_ERROR, "dynamic-texture-subdata");
+      u_tex_loc = glGetUniformLocation(program, "u_texture");
+      CHECK(u_tex_loc >= 0 && glGetError() == GL_NO_ERROR, "texture-location");
+      glUniform1i(u_tex_loc, 0);
+      CHECK(glGetError() == GL_NO_ERROR, "texture-uniform");
+      ps5_native_trace("OGL3_DYNAMIC_TEXTURE_SETUP_OK tex=%u loc=%d min=0x%x mag=0x%x wrap_s=0x%x wrap_t=0x%x\n",
+                       texture, u_tex_loc, q_min, q_mag, q_wrap_s, q_wrap_t);
+   }
 #endif
 #ifdef PS5_NATIVE_SAMPLER_STATE
    glGenSamplers(1, &sampler);
@@ -529,6 +594,27 @@ int main(void)
       }
       glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(dynamic_vertices), dynamic_vertices);
 #endif
+#ifdef PS5_NATIVE_DYNAMIC_TEXTURE
+      int cycle_frame = frames % 120;
+      float t = (cycle_frame < 60) ? ((float)cycle_frame / 60.0f) : ((float)(120 - cycle_frame) / 60.0f);
+      uint8_t g = (uint8_t)(30 + 225.0f * t);
+      if (frames < 300) {
+         /* Phase 1 (frames 0-299): partial 2x1 subregion update (top apex row) */
+         uint8_t top_row[2][4] = {
+            { 0, g, 0, 255 },
+            { 0, g, 0, 255 }
+         };
+         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 1, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, top_row);
+      } else {
+         /* Phase 2 (frames 300-599): full 2x2 texture update */
+         uint8_t full_tex[4][4] = {
+            { 0, g, 0, 255 }, { 0, g, 0, 255 },
+            { 0, g, 0, 255 }, { 0, g, 0, 255 }
+         };
+         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, full_tex);
+      }
+      CHECK(glGetError() == GL_NO_ERROR, "dynamic-texture-subdata");
+#endif
 #if defined(PS5_NATIVE_ALPHA_BLEND)
       /* Draw opaque background stripe first with blending disabled */
       glDisable(GL_BLEND);
@@ -543,7 +629,7 @@ int main(void)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(3 * sizeof(GLushort)));
       /* Draw Object 3: Culled triangle (CW, White, z=-0.5) -> offset 6 * sizeof(GLushort) */
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)(6 * sizeof(GLushort)));
-#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
 #else
       glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -579,10 +665,10 @@ cleanup:
       glBindSampler(0, 0);
       if (sampler) glDeleteSamplers(1, &sampler);
 #endif
-#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE)
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
