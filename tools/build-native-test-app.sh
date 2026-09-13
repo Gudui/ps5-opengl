@@ -252,7 +252,7 @@ python3 "$root/tools/native-display-metadata.py" "$app/sce_sys/param.json" --fps
 group="$app/vendor/libps5_opengl_group.a"
 {
     printf 'SEARCH_DIR("%s")\n' "$sdk/target/lib"
-    if [[ $gate_object == egl_public_core33_imgui*.o || $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o || $gate_object == egl_public_core33_scissor.o || $gate_object == egl_public_core33_depth_cull.o ]]; then
+    if [[ $gate_object == egl_public_core33_imgui*.o || $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o || $gate_object == egl_public_core33_scissor.o || $gate_object == egl_public_core33_depth_cull.o || $gate_object == egl_public_core33_dynamic_buffer.o ]]; then
         printf 'SEARCH_DIR("%s")\n' "$prefix/lib"
     fi
     printf 'EXTERN(ps5_agc_gate2_run)\n'
@@ -263,7 +263,7 @@ group="$app/vendor/libps5_opengl_group.a"
 } > "$group"
 printf 'APP_INCLUDE_PATHS = include\nAPP_STATIC_ARCHIVES = vendor/libps5_opengl_group.a\n' \
     > "$app/.env"
-if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o || $gate_object == egl_public_core33_scissor.o || $gate_object == egl_public_core33_depth_cull.o ]]; then
+if [[ $gate_object == egl_public_core33_triangle.o || $gate_object == egl_public_core33_indexed_triangle.o || $gate_object == egl_public_core33_uniform_matrix.o || $gate_object == egl_public_core33_texture_2d.o || $gate_object == egl_public_core33_sampler_state.o || $gate_object == egl_public_core33_alpha_blend.o || $gate_object == egl_public_core33_scissor.o || $gate_object == egl_public_core33_depth_cull.o || $gate_object == egl_public_core33_dynamic_buffer.o ]]; then
     printf 'APP_DEFINITIONS = PS5_NATIVE_BOUNDED_TRIANGLE=1\n' >> "$app/.env"
 fi
 printf '%s\n' "$title_id" > "$app/title-id.txt"
