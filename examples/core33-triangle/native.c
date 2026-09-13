@@ -51,7 +51,7 @@ int main(void)
       "   float d=texture(u_texture,v_texcoord).r;\n"
       "   color=vec4(0.0,d,0.0,1.0);\n"
       "}\n";
-#elif defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO)
+#elif defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_RESOURCE_CYCLES)
    static const char *vs = "#version 330 core\n"
       "layout(location=0) in vec2 position;\n"
       "layout(location=1) in vec2 texcoord;\n"
@@ -244,7 +244,7 @@ int main(void)
    GLuint ebo = 0;
    GLuint texture = 0;
    GLint u_tex_loc = -1;
-#elif defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE)
+#elif defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE) || defined(PS5_NATIVE_RESOURCE_CYCLES)
    /* Interleaved {pos.x, pos.y, uv.u, uv.v}.
     * Indices {0, 1, 3} form the centered triangle [-0.5, 0.5] matching control.
     * For FBO: 256x256 RGBA8 color attachment.
@@ -415,7 +415,7 @@ int main(void)
 #else
    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 #endif
-#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE)
+#if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE) || defined(PS5_NATIVE_RESOURCE_CYCLES)
    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)0);
    glEnableVertexAttribArray(0);
    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)(2 * sizeof(GLfloat)));
@@ -442,7 +442,7 @@ int main(void)
    glClearColor(0, 0, 0, 1);
 #endif
    CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE) || defined(PS5_NATIVE_RESOURCE_CYCLES)
    glGenBuffers(1, &ebo);
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
@@ -610,6 +610,13 @@ int main(void)
                        fbo, depth_texture, fbo_status);
    }
 #endif
+#ifdef PS5_NATIVE_RESOURCE_CYCLES
+   u_tex_loc = glGetUniformLocation(program, "u_texture");
+   CHECK(u_tex_loc >= 0 && glGetError() == GL_NO_ERROR, "texture-location");
+   glUniform1i(u_tex_loc, 0);
+   CHECK(glGetError() == GL_NO_ERROR, "texture-uniform");
+   ps5_native_trace("OGL3_RESOURCE_CYCLES_SETUP_OK cycles_per_frame=1\n");
+#endif
 #ifdef PS5_NATIVE_SAMPLER_STATE
    glGenSamplers(1, &sampler);
    CHECK(sampler && glGetError() == GL_NO_ERROR, "sampler-gen");
@@ -705,7 +712,73 @@ int main(void)
    start = sceKernelGetProcessTime();
    for (frames = 0; frames < 600; ++frames) {
       CHECK(sceKernelGetProcessTime() - start < UINT64_C(30000000), "frame-deadline");
-#if defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE)
+#if defined(PS5_NATIVE_RESOURCE_CYCLES)
+      /* --- Resource Allocation Phase --- */
+      GLuint frame_vbo = 0;
+      glGenBuffers(1, &frame_vbo);
+      CHECK(frame_vbo && glGetError() == GL_NO_ERROR, "resource-cycles-vbo-gen");
+      glBindBuffer(GL_ARRAY_BUFFER, frame_vbo);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+      CHECK(glGetError() == GL_NO_ERROR, "resource-cycles-vbo-data");
+
+      GLuint frame_tex = 0;
+      glGenTextures(1, &frame_tex);
+      CHECK(frame_tex && glGetError() == GL_NO_ERROR, "resource-cycles-tex-gen");
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, frame_tex);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+      CHECK(glGetError() == GL_NO_ERROR, "resource-cycles-tex-alloc");
+
+      GLuint frame_fbo = 0;
+      glGenFramebuffers(1, &frame_fbo);
+      CHECK(frame_fbo && glGetError() == GL_NO_ERROR, "resource-cycles-fbo-gen");
+      glBindFramebuffer(GL_FRAMEBUFFER, frame_fbo);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, frame_tex, 0);
+      CHECK(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE &&
+            glGetError() == GL_NO_ERROR, "resource-cycles-fbo-complete");
+
+      /* --- Pass 1: Offscreen Render into Transient FBO --- */
+      glViewport(0, 0, 256, 256);
+      {
+         int cycle_frame = frames % 120;
+         float t = (cycle_frame < 60) ? ((float)cycle_frame / 60.0f) : ((float)(120 - cycle_frame) / 60.0f);
+         float g = (30.0f + 225.0f * t) / 255.0f;
+         glClearColor(0.0f, g, 0.0f, 1.0f);
+      }
+      glClear(GL_COLOR_BUFFER_BIT);
+      CHECK(glGetError() == GL_NO_ERROR, "resource-cycles-fbo-draw");
+
+      /* --- Pass 2: Onscreen Render to Default Backbuffer --- */
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      glViewport(0, 0, width, height);
+      glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+
+      glBindBuffer(GL_ARRAY_BUFFER, frame_vbo);
+      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)0);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (const void *)(2 * sizeof(GLfloat)));
+      glEnableVertexAttribArray(1);
+
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, frame_tex);
+      glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
+      glFinish();
+      CHECK(glGetError() == GL_NO_ERROR, "resource-cycles-draw");
+
+      /* --- Resource Destruction Phase --- */
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      glDeleteFramebuffers(1, &frame_fbo);
+      glBindTexture(GL_TEXTURE_2D, 0);
+      glDeleteTextures(1, &frame_tex);
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+      glDeleteBuffers(1, &frame_vbo);
+      CHECK(glGetError() == GL_NO_ERROR, "resource-cycles-delete");
+#elif defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE)
       /* Pass 1: Offscreen render into FBO */
       glBindFramebuffer(GL_FRAMEBUFFER, fbo);
       glViewport(0, 0, 256, 256);
@@ -794,6 +867,7 @@ int main(void)
       }
       CHECK(glGetError() == GL_NO_ERROR, "dynamic-texture-subdata");
 #endif
+#if !defined(PS5_NATIVE_RESOURCE_CYCLES)
 #if defined(PS5_NATIVE_ALPHA_BLEND)
       /* Draw opaque background stripe first with blending disabled */
       glDisable(GL_BLEND);
@@ -815,6 +889,7 @@ int main(void)
 #endif
       glFinish();
       CHECK(glGetError() == GL_NO_ERROR, "draw-finish");
+#endif
       CHECK(eglSwapBuffers(display, surface), "swap");
       if (frames == 0 || (frames + 1) % 60 == 0)
          ps5_native_trace("OGL2_FRAME_COMPLETE frame=%u\n", frames + 1);
@@ -857,7 +932,7 @@ cleanup:
 #if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE) || defined(PS5_NATIVE_RESOURCE_CYCLES)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
