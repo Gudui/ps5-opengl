@@ -266,10 +266,11 @@ int main(void)
    };
    static const GLushort indices[] = {0, 1, 3};
    GLuint ebo = 0;
-   GLuint fbo = 0;
 #if defined(PS5_NATIVE_FBO)
+   GLuint fbo = 0;
    GLuint fbo_texture = 0;
 #elif defined(PS5_NATIVE_DEPTH_TEXTURE)
+   GLuint fbo = 0;
    GLuint depth_texture = 0;
 #endif
    GLint u_tex_loc = -1;
