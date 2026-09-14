@@ -56,7 +56,7 @@ gate=$(tr -d '\r\n' < "$selected")
     printf 'invalid selected gate: %s\n' "$gate" >&2
     exit 1
 }
-if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o || $gate == egl_public_core33_alpha_blend.o || $gate == egl_public_core33_scissor.o || $gate == egl_public_core33_depth_cull.o || $gate == egl_public_core33_dynamic_buffer.o || $gate == egl_public_core33_dynamic_texture.o || $gate == egl_public_core33_fbo.o || $gate == egl_public_core33_depth_texture.o || $gate == egl_public_core33_resource_cycles.o ]]; then
+if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o || $gate == egl_public_core33_alpha_blend.o || $gate == egl_public_core33_scissor.o || $gate == egl_public_core33_depth_cull.o || $gate == egl_public_core33_dynamic_buffer.o || $gate == egl_public_core33_dynamic_texture.o || $gate == egl_public_core33_fbo.o || $gate == egl_public_core33_depth_texture.o || $gate == egl_public_core33_resource_cycles.o || $gate == egl_public_core33_lifecycle_cycles.o ]]; then
     grep -aFq '[ps5-opengl-native] gate completed status=%d' "$linked"
     for marker in OGL2_MAIN_ENTER OGL2_RUN_COMPLETE OGL2_EGL_TEARDOWN_OK OGL2_EXIT_REQUEST_BEGIN "$title_id"; do
         grep -aFq "$marker" "$linked"
@@ -64,7 +64,7 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
     grep -aFq "$(cat "$stage/source-commit.txt")" "$linked"
     nm -u "$linked" | grep -F sceSystemServiceLoadExec >/dev/null
     nm -u "$linked" | grep -F sceKernelDebugOutText >/dev/null
-    if [[ $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o || $gate == egl_public_core33_scissor.o || $gate == egl_public_core33_dynamic_buffer.o || $gate == egl_public_core33_dynamic_texture.o || $gate == egl_public_core33_fbo.o || $gate == egl_public_core33_depth_texture.o || $gate == egl_public_core33_resource_cycles.o ]]; then
+    if [[ $gate == egl_public_core33_indexed_triangle.o || $gate == egl_public_core33_uniform_matrix.o || $gate == egl_public_core33_texture_2d.o || $gate == egl_public_core33_sampler_state.o || $gate == egl_public_core33_scissor.o || $gate == egl_public_core33_dynamic_buffer.o || $gate == egl_public_core33_dynamic_texture.o || $gate == egl_public_core33_fbo.o || $gate == egl_public_core33_depth_texture.o || $gate == egl_public_core33_resource_cycles.o || $gate == egl_public_core33_lifecycle_cycles.o ]]; then
         grep -aFq 'OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0' "$linked"
         nm "$linked" | grep -E ' [Tt] glDrawElements$' >/dev/null
     elif [[ $gate == egl_public_core33_alpha_blend.o ]]; then
@@ -202,6 +202,21 @@ if [[ $gate == egl_public_core33_triangle.o || $gate == egl_public_core33_indexe
         nm "$linked" | grep -E ' [Tt] glDeleteFramebuffers$' >/dev/null
         nm "$linked" | grep -E ' [Tt] glGetUniformLocation$' >/dev/null
         nm "$linked" | grep -E ' [Tt] glUniform1i$' >/dev/null
+    fi
+    if [[ $gate == egl_public_core33_lifecycle_cycles.o ]]; then
+        grep -aFq 'OGL3_LIFECYCLE_SESSION_BEGIN session=%u' "$linked"
+        grep -aFq 'OGL3_LIFECYCLE_SETUP_OK session=%u loc=%d' "$linked"
+        grep -aFq 'OGL3_LIFECYCLE_SESSION_TEARDOWN_BEGIN session=%u' "$linked"
+        grep -aFq 'OGL3_LIFECYCLE_SESSION_OK session=%u' "$linked"
+        nm "$linked" | grep -E ' [Tt] glUniform4f$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glGetUniformLocation$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDeleteVertexArrays$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDeleteBuffers$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDeleteProgram$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] glDeleteShader$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] eglDestroyContext$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] eglDestroySurface$' >/dev/null
+        nm "$linked" | grep -E ' [Tt] eglTerminate$' >/dev/null
     fi
     readelf -d "$converted" | grep -F 'Shared library: [libSceSystemService.prx]' >/dev/null
 else

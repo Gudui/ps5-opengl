@@ -113,6 +113,12 @@ int main(void)
       "void main(){gl_Position=u_transform*vec4(position,0.0,1.0);}\n";
    static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
       "void main(){color=vec4(1.0,0.0,1.0,1.0);}\n";
+#elif defined(PS5_NATIVE_LIFECYCLE_CYCLES)
+   static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
+      "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
+   static const char *fs = "#version 330 core\nlayout(location=0) out vec4 color;\n"
+      "uniform vec4 u_color;\n"
+      "void main(){color=u_color;}\n";
 #else
    static const char *vs = "#version 330 core\nlayout(location=0) in vec2 position;\n"
       "void main(){gl_Position=vec4(position,0.0,1.0);}\n";
@@ -289,11 +295,14 @@ int main(void)
    };
    GLuint ebo = 0;
    GLint u_loc = -1;
-#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DYNAMIC_BUFFER)
+#elif defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_LIFECYCLE_CYCLES)
    /* First three vertices are degenerate: ignoring the EBO cannot pass visually. */
    static const GLfloat vertices[] = {-0.5f,-0.5f, 0.5f,-0.5f, -0.5f,-0.5f, 0.0f,0.5f};
    static const GLushort indices[] = {0, 1, 3};
    GLuint ebo = 0;
+#if defined(PS5_NATIVE_LIFECYCLE_CYCLES)
+   GLint u_color_loc = -1;
+#endif
 #elif defined(PS5_NATIVE_DEPTH_CULL)
    /* Vertex structure: {pos.x, pos.y, pos.z, color.r, color.g, color.b, color.a} (stride = 7 floats)
     * Object 1 (vertices 0..2, indices 0,1,2, CCW):
@@ -363,6 +372,115 @@ int main(void)
 #define CHECK(expr, name) do { operation = name; if (!(expr)) goto cleanup; } while (0)
    ps5_native_trace("OGL2_MAIN_ENTER title=%s build=%s start_us=%llu\n", PS5_NATIVE_TITLE_ID,
           PS5_NATIVE_BUILD_ID, (unsigned long long)sceKernelGetProcessTime());
+#if defined(PS5_NATIVE_LIFECYCLE_CYCLES)
+   unsigned session = 0;
+   const unsigned total_sessions = 3;
+   const unsigned frames_per_session = 200;
+   start = sceKernelGetProcessTime();
+   for (session = 0; session < total_sessions; ++session) {
+      display = EGL_NO_DISPLAY;
+      surface = EGL_NO_SURFACE;
+      context = EGL_NO_CONTEXT;
+      config = NULL;
+      major = minor = count = width = height = 0;
+      vertex = fragment = program = vao = vbo = ebo = 0;
+      initialized = current = 0;
+      ps5_native_trace("OGL3_LIFECYCLE_SESSION_BEGIN session=%u\n", session);
+      display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+      CHECK(display != EGL_NO_DISPLAY, "get-display");
+      CHECK(eglInitialize(display, &major, &minor), "initialize");
+      initialized = 1;
+      ps5_native_trace("OGL2_EGL_INITIALIZE_OK");
+      CHECK(eglBindAPI(EGL_OPENGL_API), "bind-api");
+      CHECK(eglChooseConfig(display, configs, &config, 1, &count) && count == 1, "config");
+      surface = eglCreateWindowSurface(display, config, (EGLNativeWindowType)0, NULL);
+      CHECK(surface != EGL_NO_SURFACE, "surface");
+      context = eglCreateContext(display, config, EGL_NO_CONTEXT, contexts);
+      CHECK(context != EGL_NO_CONTEXT, "context");
+      CHECK(eglMakeCurrent(display, surface, surface, context), "make-current");
+      current = 1;
+      glGetIntegerv(GL_MAJOR_VERSION, &gl_major);
+      glGetIntegerv(GL_MINOR_VERSION, &gl_minor);
+      glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
+      CHECK(gl_major == 3 && gl_minor == 3 && (profile & GL_CONTEXT_CORE_PROFILE_BIT)
+            && glGetError() == GL_NO_ERROR, "context-profile");
+      ps5_native_trace("OGL2_CONTEXT_CURRENT major=%d minor=%d profile=core\n", gl_major, gl_minor);
+      CHECK(eglQuerySurface(display, surface, EGL_WIDTH, &width) &&
+            eglQuerySurface(display, surface, EGL_HEIGHT, &height) && width > 0 && height > 0,
+            "surface-size");
+      vertex = compile_shader(GL_VERTEX_SHADER, vs, "vertex");
+      CHECK(vertex, "vertex-compile");
+      fragment = compile_shader(GL_FRAGMENT_SHADER, fs, "fragment");
+      CHECK(fragment, "fragment-compile");
+      program = glCreateProgram();
+      CHECK(program, "create-program");
+      glAttachShader(program, vertex);
+      glAttachShader(program, fragment);
+      glLinkProgram(program);
+      glGetProgramiv(program, GL_LINK_STATUS, &linked);
+      CHECK(linked, "program-link");
+      ps5_native_trace("OGL2_PROGRAM_LINK_OK");
+      glGenVertexArrays(1, &vao);
+      glBindVertexArray(vao);
+      glGenBuffers(1, &vbo);
+      glBindBuffer(GL_ARRAY_BUFFER, vbo);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+      glEnableVertexAttribArray(0);
+      glUseProgram(program);
+      glViewport(0, 0, width, height);
+      glClearColor(0, 0, 0, 1);
+      CHECK(vao && vbo && glGetError() == GL_NO_ERROR, "vertex-setup");
+      glGenBuffers(1, &ebo);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+      glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+      CHECK(ebo && glGetError() == GL_NO_ERROR, "index-setup");
+      ps5_native_trace("OGL3_INDEXED_SETUP_OK type=ushort count=3 indices=0,1,3 offset=0");
+      u_color_loc = glGetUniformLocation(program, "u_color");
+      CHECK(u_color_loc >= 0 && glGetError() == GL_NO_ERROR, "lifecycle-uniform-location");
+      ps5_native_trace("OGL3_LIFECYCLE_SETUP_OK session=%u loc=%d\n", session, u_color_loc);
+
+      for (frames = 0; frames < frames_per_session; ++frames) {
+         CHECK(sceKernelGetProcessTime() - start < UINT64_C(40000000), "frame-deadline");
+         glClear(GL_COLOR_BUFFER_BIT);
+         int cycle_frame = frames % 120;
+         float t = (cycle_frame < 60) ? ((float)cycle_frame / 60.0f) : ((float)(120 - cycle_frame) / 60.0f);
+         float g = (30.0f + 225.0f * t) / 255.0f;
+         glUniform4f(u_color_loc, 0.0f, g, 0.0f, 1.0f);
+         glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, NULL);
+         glFinish();
+         CHECK(glGetError() == GL_NO_ERROR, "draw-finish");
+         CHECK(eglSwapBuffers(display, surface), "swap");
+         unsigned global_frame = session * frames_per_session + frames + 1;
+         if (frames == 0 || (frames + 1) % 60 == 0 || (frames + 1) == frames_per_session) {
+            ps5_native_trace("OGL2_FRAME_COMPLETE frame=%u\n", global_frame);
+         }
+      }
+
+      ps5_native_trace("OGL3_LIFECYCLE_SESSION_TEARDOWN_BEGIN session=%u\n", session);
+      if (ebo) { glDeleteBuffers(1, &ebo); ebo = 0; }
+      if (vbo) { glDeleteBuffers(1, &vbo); vbo = 0; }
+      if (vao) { glDeleteVertexArrays(1, &vao); vao = 0; }
+      if (program) { glDeleteProgram(program); program = 0; }
+      if (fragment) { glDeleteShader(fragment); fragment = 0; }
+      if (vertex) { glDeleteShader(vertex); vertex = 0; }
+      CHECK(glGetError() == GL_NO_ERROR, "session-gl-teardown");
+      CHECK(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT), "session-egl-make-current-none");
+      current = 0;
+      CHECK(eglDestroyContext(display, context), "session-egl-destroy-context");
+      context = EGL_NO_CONTEXT;
+      CHECK(eglDestroySurface(display, surface), "session-egl-destroy-surface");
+      surface = EGL_NO_SURFACE;
+      CHECK(eglTerminate(display), "session-egl-terminate");
+      initialized = 0;
+      display = EGL_NO_DISPLAY;
+      ps5_native_trace("OGL3_LIFECYCLE_SESSION_OK session=%u\n", session);
+   }
+   ps5_native_trace("OGL2_RUN_COMPLETE frames=600 elapsed_ms=%llu reason=frame-limit\n",
+                    (unsigned long long)((sceKernelGetProcessTime() - start) / 1000));
+   ps5_native_trace("OGL2_EGL_TEARDOWN_OK");
+   return 0;
+#else
    display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
    CHECK(display != EGL_NO_DISPLAY, "get-display");
    CHECK(eglInitialize(display, &major, &minor), "initialize");
@@ -898,6 +1016,7 @@ int main(void)
    ps5_native_trace("OGL2_RUN_COMPLETE frames=%u elapsed_ms=%llu reason=frame-limit\n", frames,
           (unsigned long long)((sceKernelGetProcessTime() - start) / 1000));
    result = 0;
+#endif
 cleanup:
    if (result) ps5_native_trace("OGL2_FAIL operation=%s egl=0x%x frames=%u\n", operation,
                       eglGetError(), frames);
@@ -933,7 +1052,7 @@ cleanup:
 #if defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_DYNAMIC_TEXTURE)
       if (texture) glDeleteTextures(1, &texture);
 #endif
-#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE) || defined(PS5_NATIVE_RESOURCE_CYCLES)
+#if defined(PS5_NATIVE_INDEXED_TRIANGLE) || defined(PS5_NATIVE_UNIFORM_MATRIX) || defined(PS5_NATIVE_TEXTURE_2D) || defined(PS5_NATIVE_SAMPLER_STATE) || defined(PS5_NATIVE_ALPHA_BLEND) || defined(PS5_NATIVE_SCISSOR) || defined(PS5_NATIVE_DEPTH_CULL) || defined(PS5_NATIVE_DYNAMIC_BUFFER) || defined(PS5_NATIVE_DYNAMIC_TEXTURE) || defined(PS5_NATIVE_FBO) || defined(PS5_NATIVE_DEPTH_TEXTURE) || defined(PS5_NATIVE_RESOURCE_CYCLES) || defined(PS5_NATIVE_LIFECYCLE_CYCLES)
       if (ebo) glDeleteBuffers(1, &ebo);
 #endif
       if (vbo) glDeleteBuffers(1, &vbo);
