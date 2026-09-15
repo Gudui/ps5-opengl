@@ -13,7 +13,11 @@
 
 extern int sceKernelUsleep(uint32_t microseconds);
 
+#ifdef PS5_OPENGL_STANDALONE_LOG
 __attribute__((constructor)) static void ps5_opengl_open_log(void) {
+#else
+void ps5_opengl_open_log(void) {
+#endif
 #ifdef PS5_NATIVE_BOUNDED_TRIANGLE
   /* Retain inherited console descriptors; do not depend on writable title storage. */
   setvbuf(stdout, NULL, _IONBF, 0);
@@ -54,35 +58,125 @@ void ps5_opengl_glapi_tls_context_init(void) __asm__(
 
 void ps5_opengl_glapi_tls_context_init(void) {}
 
-__attribute__((noreturn)) void __assert(const char *function, const char *file,
+/* DSO handle pointer for dynamic shared object destructor registration (__cxa_atexit) */
+__attribute__((weak)) void *__dso_handle = 0;
+
+/* Weak POSIX stubs so libc.a implementations override cleanly if pulled */
+__attribute__((weak, noreturn)) void __assert(const char *function, const char *file,
                                         int line, const char *expression) {
   fprintf(stderr, "assertion failed: %s (%s:%d, %s)\n", expression, file, line,
           function);
   abort();
 }
 
-int mkstemps(char *template_name, int suffix_length) {
+__attribute__((weak)) int mkstemps(char *template_name, int suffix_length) {
   (void)template_name;
   (void)suffix_length;
   errno = ENOSYS;
   return -1;
 }
 
-void openlog(const char *identifier, int option, int facility) {
+__attribute__((weak)) void openlog(const char *identifier, int option, int facility) {
   (void)identifier;
   (void)option;
   (void)facility;
 }
 
-FILE *popen(const char *command, const char *mode) {
+__attribute__((weak)) FILE *popen(const char *command, const char *mode) {
   (void)command;
   (void)mode;
   errno = ENOSYS;
   return NULL;
 }
 
-int pclose(FILE *stream) {
+__attribute__((weak)) int pclose(FILE *stream) {
   (void)stream;
   errno = ENOSYS;
   return -1;
 }
+
+/* Fallback unwinder stubs for C++ ABI personality references without libunwind.a duplicate symbols */
+struct _Unwind_Exception;
+struct _Unwind_Context;
+
+__attribute__((weak)) void _Unwind_DeleteException(struct _Unwind_Exception *exc) {
+  (void)exc;
+}
+
+__attribute__((weak)) int _Unwind_RaiseException(struct _Unwind_Exception *exc) {
+  (void)exc;
+  abort();
+}
+
+__attribute__((weak)) uintptr_t _Unwind_GetLanguageSpecificData(struct _Unwind_Context *ctx) {
+  (void)ctx;
+  return 0;
+}
+
+__attribute__((weak)) uintptr_t _Unwind_GetRegionStart(struct _Unwind_Context *ctx) {
+  (void)ctx;
+  return 0;
+}
+
+__attribute__((weak)) uintptr_t _Unwind_GetIP(struct _Unwind_Context *ctx) {
+  (void)ctx;
+  return 0;
+}
+
+__attribute__((weak)) void _Unwind_SetIP(struct _Unwind_Context *ctx, uintptr_t val) {
+  (void)ctx;
+  (void)val;
+}
+
+__attribute__((weak)) void _Unwind_SetGR(struct _Unwind_Context *ctx, int idx, uintptr_t val) {
+  (void)ctx;
+  (void)idx;
+  (void)val;
+}
+
+/* Missing POSIX locale stubs */
+__attribute__((weak)) double strtod_l(const char *nptr, char **endptr, void *loc) {
+  (void)loc;
+  return strtod(nptr, endptr);
+}
+
+__attribute__((weak)) float strtof_l(const char *nptr, char **endptr, void *loc) {
+  (void)loc;
+  return strtof(nptr, endptr);
+}
+
+__attribute__((weak)) void *newlocale(int category_mask, const char *locale, void *base) {
+  (void)category_mask;
+  (void)locale;
+  (void)base;
+  return (void *)1;
+}
+
+__attribute__((weak)) void freelocale(void *locobj) {
+  (void)locobj;
+}
+
+/* Missing POSIX reentrant quicksort, bridging to libc qsort_s */
+extern int qsort_s(void *base, size_t nmemb, size_t size,
+                   int (*compar)(const void *, const void *, void *),
+                   void *context);
+
+struct ps5_qsort_r_data {
+  void *thunk;
+  int (*compar)(void *, const void *, const void *);
+};
+
+static int ps5_qsort_adapt_cmp(const void *a, const void *b, void *context) {
+  struct ps5_qsort_r_data *d = (struct ps5_qsort_r_data *)context;
+  return d->compar(d->thunk, a, b);
+}
+
+__attribute__((weak)) void qsort_r(void *base, size_t nmemb, size_t size,
+                                   void *thunk,
+                                   int (*compar)(void *, const void *, const void *)) {
+  struct ps5_qsort_r_data d = { thunk, compar };
+  qsort_s(base, nmemb, size, ps5_qsort_adapt_cmp, &d);
+}
+
+
+
