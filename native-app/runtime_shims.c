@@ -182,5 +182,27 @@ __attribute__((weak)) void qsort_r(void *base, size_t nmemb, size_t size,
   qsort_s(base, nmemb, size, ps5_qsort_adapt_cmp, &d);
 }
 
+/* POSIX/glibc CPU set allocation shims for NativeAOT PalUnix */
+__attribute__((weak)) void *__sched_cpualloc(size_t count) {
+  return malloc(count);
+}
+
+__attribute__((weak)) void __sched_cpufree(void *set) {
+  free(set);
+}
+
+/* C99 fscanf shim for minipal cpucount */
+#include <stdarg.h>
+extern int vfscanf(FILE *stream, const char *format, va_list arg);
+
+__attribute__((weak)) int __isoc99_fscanf(FILE *stream, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  int ret = vfscanf(stream, format, args);
+  va_end(args);
+  return ret;
+}
+
+
 
 
