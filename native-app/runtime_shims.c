@@ -76,6 +76,10 @@ __attribute__((weak)) int mkstemps(char *template_name, int suffix_length) {
   return -1;
 }
 
+__attribute__((weak)) int mkstemp(char *template_name) {
+  return mkstemps(template_name, 0);
+}
+
 __attribute__((weak)) void openlog(const char *identifier, int option, int facility) {
   (void)identifier;
   (void)option;
