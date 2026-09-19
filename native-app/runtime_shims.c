@@ -203,6 +203,73 @@ __attribute__((weak)) int __isoc99_fscanf(FILE *stream, const char *format, ...)
   return ret;
 }
 
+/* POSIX process and terminal fallback stubs for NativeAOT / System.Native */
+__attribute__((weak, noreturn)) void _exit(int status) {
+  exit(status);
+}
 
+__attribute__((weak)) int execve(const char *path, char *const argv[], char *const envp[]) {
+  (void)path;
+  (void)argv;
+  (void)envp;
+  errno = ENOSYS;
+  return -1;
+}
 
+__attribute__((weak)) int getgroups(int gidsetsize, int grouplist[]) {
+  (void)gidsetsize;
+  (void)grouplist;
+  return 0;
+}
 
+__attribute__((weak)) int setgroups(size_t size, const int *list) {
+  (void)size;
+  (void)list;
+  errno = EPERM;
+  return -1;
+}
+
+__attribute__((weak)) int getpriority(int which, int who) {
+  (void)which;
+  (void)who;
+  return 0;
+}
+
+__attribute__((weak)) int setpriority(int which, int who, int prio) {
+  (void)which;
+  (void)who;
+  (void)prio;
+  errno = EPERM;
+  return -1;
+}
+
+__attribute__((weak)) int getsid(int pid) {
+  return (pid == 0 ? 1 : pid);
+}
+
+__attribute__((weak)) int setuid(int uid) {
+  (void)uid;
+  errno = EPERM;
+  return -1;
+}
+
+__attribute__((weak)) int seteuid(int euid) {
+  (void)euid;
+  errno = EPERM;
+  return -1;
+}
+
+__attribute__((weak)) int tcgetattr(int fd, void *termios_p) {
+  (void)fd;
+  (void)termios_p;
+  errno = ENOTTY;
+  return -1;
+}
+
+__attribute__((weak)) int tcsetattr(int fd, int optional_actions, const void *termios_p) {
+  (void)fd;
+  (void)optional_actions;
+  (void)termios_p;
+  errno = ENOTTY;
+  return -1;
+}
