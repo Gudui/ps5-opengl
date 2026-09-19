@@ -2213,7 +2213,7 @@ require("case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:" in MANAGER and
 
 require("PS5_AGC_BIND_NATIVE_API(agc, sceAgcDcbSetNumInstances)" in
         NATIVE_RUNTIME and
-        "VIDEO_OUT_PIXEL_FORMAT UINT64_C(0x8000000000000000)" in
+        "VIDEO_OUT_PIXEL_FORMAT UINT64_C(0x8000000022000000)" in
         NATIVE_RUNTIME and
         "runtime_video_registered" in NATIVE_RUNTIME and
         "sceVideoOutSubmitFlip" in NATIVE_RUNTIME and
